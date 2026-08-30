@@ -1,0 +1,6 @@
+# local cache, not source
+data/
+
+__pycache__/
+*.pyc
+.venv/
