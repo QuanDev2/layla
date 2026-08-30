@@ -1,42 +1,63 @@
 # Handoff — Layla
 
 ## Status
-Planning only. No code written yet. Folder renamed from `multi-agent` to
-`layla` in this session.
+YouTube ingest pipeline built and verified against real videos. Tools, domain
+instructions, and docs are in place. Frame extraction is specified but unbuilt.
 
-## Decisions made this session
-- Structure: monorepo — one repo, shared `core/`, agents as modules
-  (originally "Option A" in discussion).
-- Orchestrator: no separate service or LLM-router code. The interactive omp
-  session invoked in this folder *is* the orchestrator ("Layla"). It reasons
-  over agent output directly.
-- Billing: confirmed no API key configured locally
-  (`~/.omp/agent/config.yml` has empty `providers:`, `CLAUDECODE=1` set) —
-  this session already runs on the Claude account login, not pay-per-token
-  API billing. Layla rides on that. A separate API key is only needed for
-  future unattended/scheduled runs, which are out of scope right now.
-- Both agents run on-demand (no cron) for now, including email (originally
-  considered periodic, downgraded to on-demand for the first version).
-- Storage: single Postgres instance + `pgvector` extension, no separate
-  vector DB.
-- Email agent workflow: scan → Layla summarizes + proposes keep/archive
-  (flagging spam/ads) → you confirm/override per email → "keep" gets stored,
-  "archive" gets applied via the mail API.
-- Folder/orchestrator name: **Layla**.
+## Architecture settled
+- **Layla is the orchestrator** — the interactive session, not a service.
+- **Domains are folders**, each with its own `AGENTS.md` + tools. Layla loads
+  only the domain in play, so her baseline stays flat as domains grow.
+- **Mode split decides structure per task:** discussion keeps material in
+  Layla's context; verdict work delegates to subagents. Storing the full source
+  alongside summaries means delegation loses nothing — summaries drive triage,
+  full transcripts stay on disk for deep dives.
+- **"YouTube agent" = Layla wearing `agents/youtube/AGENTS.md`**, not a process.
 
-## Open questions (not yet decided)
-- Postgres instance: reuse one from another repo, or provision a new one?
-- YouTube transcript source: which library/API?
-- Email provider + auth: Gmail API vs IMAP, OAuth vs app password?
-- Per-agent naming beyond "Layla" for the orchestrator?
+## Decisions made
+- No database. Markdown in `data/videos/` (gitignored). Postgres/pgvector only
+  when cross-video semantic search actually matters; markdown stays the source
+  of truth so embedding later is a script, not a migration.
+- No cron. Unattended runs would need a paid API key for the reasoning step;
+  session-triggered ingest rides your existing login and loses nothing since you
+  only read results when you sit down.
+- Playlists must be public or unlisted — avoids OAuth entirely.
+- Credentials: tools hold capabilities, Layla holds none. Secrets go from
+  keychain/env into the tool process, never into conversation. Narrow provider
+  scopes; confirm before mutating. Not exercised yet — YouTube needs no auth.
+- Worth-watching verdicts are computed at triage time, never frozen into
+  `summary.md`, because relevance changes week to week.
+- Email deferred. It is verdict work and will use subagent delegation.
+
+## Built
+| Path | Does |
+|---|---|
+| `agents/youtube/playlist.py` | List playlist/video metadata via yt-dlp |
+| `agents/youtube/run.py` | Timestamped transcript, two sources with fallback |
+| `agents/youtube/index.py` | Regenerate `INDEX.md` from summary frontmatter |
+| `agents/youtube/AGENTS.md` | Domain workflows: ingest, triage, deep dive |
+| `AGENTS.md` | Layla's identity, domain registry, mode split |
+
+## Verified against real videos
+- Playlist listing on a real channel playlist; channel falls back to the
+  playlist owner, which flat mode populates.
+- Both transcript sources, plus the fallback path with the primary forced to fail.
+- Video with no captions fails both sources with a readable error — correct
+  behavior, not a bug.
+- Two caption artifacts found by testing and fixed: hard line breaks splitting a
+  timestamp across lines, and repeated cues (exact duplicates from the API,
+  rolling restatements from auto-captions). One dedupe now covers both sources.
+- Ingest subagents wrote contract-conforming summaries; index regenerated.
 
 ## Next steps
-1. Pick the Postgres instance; add `db/migrations` for `emails` and
-   `youtube_transcripts` (+ pgvector).
-2. Scaffold `core/agent.py` contract and `core/storage.py`.
-3. Build the YouTube agent (`agents/youtube/run.py`) — simplest, on-demand,
-   no auth required.
-4. Build the email agent (`agents/email/run.py`) — needs the provider/auth
-   decision first.
-5. Write root `AGENTS.md` so any omp session opened in this folder knows
-   it's Layla and how to invoke the agents.
+1. Run ingest on your real playlist; confirm the summaries are useful to triage.
+2. Lazy frame extraction — `yt-dlp --download-sections` + single-frame ffmpeg
+   grab at timestamps the transcript flags. Flag syntax still unverified.
+3. Only if context pain shows up: OCR text-only slides instead of shipping
+   images (~100 tokens vs ~1.5k).
+4. Email domain, once you pick provider and auth.
+
+## Open questions
+- Which playlist is the real one to ingest from?
+- Batch frame extraction strategy if unattended ingest ever matters — interval
+  sampling plus perceptual-hash dedupe is the current plan, untested.
