@@ -1,5 +1,38 @@
 # Layla — Spec
 
+## Prerequisites
+
+Two kinds of dependency, deliberately kept separate.
+
+**Python packages** — `pip3 install -r requirements.txt`
+
+| Package | Pin | Used by |
+|---|---|---|
+| `youtube-transcript-api` | `==1.2.4` | `run.py` primary transcript source |
+
+**System binaries** — installed outside pip, invoked as subprocesses
+
+| Binary | Required? | Used by | Install |
+|---|---|---|---|
+| `yt-dlp` | Yes | `playlist.py`; `run.py` fallback transcript source | `brew install yt-dlp` |
+| `ffmpeg` | Not yet | frame extraction (specified, unbuilt) | `brew install ffmpeg` |
+
+`yt-dlp` is deliberately **not** in `requirements.txt` even though it is
+pip-installable. Reasons:
+- The code invokes it as a PATH binary, not an import. On this machine it
+  resolves to `/opt/homebrew/bin/yt-dlp`; a pip copy's console script lands in
+  `~/Library/Python/3.9/bin`, which is not on PATH, so the pin would describe a
+  binary that never runs.
+- YouTube changes break yt-dlp regularly. `brew upgrade yt-dlp` keeps it
+  current; a pinned pip version goes stale and fails silently.
+
+Version floor matters more than an exact pin — keep it recent. Verified against
+yt-dlp 2026.06.09 and ffmpeg 8.1.1.
+
+If `yt-dlp` is missing, `run.py`'s fallback returns
+`{"ok": false, ... "yt-dlp not found on PATH"}` rather than crashing, and the
+primary source still works on its own.
+
 ## Repo layout
 ```
 layla/

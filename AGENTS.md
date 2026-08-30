@@ -46,7 +46,9 @@ pre-filtering, flag blockers explicitly.
 
 ## Environment
 
-- Python 3.9, dependencies in `requirements.txt` (`pip3 install -r requirements.txt`).
-- `ffmpeg` 8.1.1 and `yt-dlp` 2026.06.09 available on PATH.
+- Python 3.9. Packages: `pip3 install -r requirements.txt`.
+- System binaries, brew-managed and invoked as subprocesses, not pip packages:
+  `yt-dlp` 2026.06.09 (required) and `ffmpeg` 8.1.1 (frames, not yet used).
+  Full rationale in SPEC.md "Prerequisites".
 - Stored data lives in `data/`, which is gitignored — it's a local cache, not
   source.
