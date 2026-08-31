@@ -3,15 +3,19 @@
 Read this when the request involves YouTube videos: ingesting a playlist,
 triaging what's worth watching, or discussing a specific video.
 
-## Tools (plumbing, no LLM)
+## Tools
 
 | Tool | Purpose |
 |---|---|
 | `python3 -m agents.youtube.playlist <url> [--limit N]` | List video ids + metadata for a playlist or single video |
-| `python3 -m agents.youtube.run <url> [--out-dir data/videos]` | Fetch timestamped transcript; writes `transcript.md` with `--out-dir` |
-| `python3 -m agents.youtube.index [--root data/videos]` | Regenerate `INDEX.md` from summary frontmatter |
+| `python3 -m agents.youtube.run <url> [--out-dir ...]` | Fetch timestamped transcript; writes `transcript.md` with `--out-dir` |
+| `python3 -m agents.youtube.agent <transcript> <summary>` | Summarize one transcript into `summary.md` via a headless omp subagent (read+write only) |
+| `python3 -m agents.youtube.ingest <playlist-url>` | Full pipeline: transcript fetch, summarize, reindex — one call |
+| `python3 -m agents.youtube.index [--root ...]` | Regenerate `INDEX.md` from summary frontmatter |
 
-All print JSON to stdout, exit 0 on success, 1 on failure.
+All print JSON to stdout, exit 0 on success, 1 on failure. Store paths default
+to the package-local `agents/youtube/data/videos/`; override with `--out-dir` /
+`--root` only when writing elsewhere.
 
 `run.py` has two transcript sources and tries them in order:
 `youtube-transcript-api` first (structured, fast), then `yt-dlp` subtitles as a
@@ -26,7 +30,7 @@ bug: report it and move on.
 ## Store layout
 
 ```
-data/videos/
+agents/youtube/data/videos/
   INDEX.md                  # generated; one row per video
   <video_id>/
     summary.md              # frontmatter + summary + key timestamps
@@ -40,18 +44,15 @@ context.
 
 ## Workflow: ingest a playlist
 
-1. `playlist.py <playlist-url>` → entries with `video_id`, `title`, `channel`, `duration`.
-2. Skip any `video_id` that already has `data/videos/<id>/summary.md`.
-3. For each new video: `run.py <url> --out-dir data/videos` → writes `transcript.md`.
-4. Fan out **one subagent per video, in parallel** (single `task` batch). Each
-   subagent reads only its own `transcript.md` and writes `summary.md`.
-   Transcripts must not enter the main session context.
-5. `index.py` → regenerate `INDEX.md`.
-6. Report to the user: count ingested, titles, anything that failed.
+Call `python3 -m agents.youtube.ingest <playlist-url>`. One call handles
+listing, skip-if-already-ingested, transcript fetch, summarize (headless
+subagent per video, sequential), and index regeneration.
 
-Subagent instructions must specify: read `data/videos/<id>/transcript.md`, write
-`data/videos/<id>/summary.md` in the format below, and do nothing else — no
-formatters, no tests, no other files.
+Report to the user: count ingested, titles, anything in `transcript_failed`
+(no captions) or `summary_failed` (subagent didn't write a summary).
+
+Transcripts never enter the main session context — each summarizer subagent
+reads only its own `transcript.md`.
 
 ## summary.md format
 
@@ -89,7 +90,7 @@ transcript alone can't convey. That list drives frame extraction later.
 
 ## Workflow: triage ("what's worth watching?")
 
-1. Read `data/videos/INDEX.md`.
+1. Read `agents/youtube/data/videos/INDEX.md`.
 2. Read `summary.md` for videos with `status: new`.
 3. Rank against what the user is currently working on — ask if unclear.
 4. Report: title, one-line pitch, why it matters to them now, and a skip

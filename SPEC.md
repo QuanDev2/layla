@@ -45,22 +45,23 @@ layla/
       AGENTS.md           # YouTube domain instructions + workflows
       playlist.py         # list playlist/video metadata (yt-dlp)
       run.py              # fetch timestamped transcript (2 sources, fallback)
+      agent.py            # summarize a transcript via headless omp subagent
+      ingest.py           # one-call ingest pipeline
       index.py            # regenerate the store index
-  data/                   # gitignored local cache
-    videos/
-      INDEX.md
-      <video_id>/
-        summary.md
-        transcript.md
-        frames/           # later
+      data/               # gitignored local cache
+        videos/
+          INDEX.md
+          <video_id>/
+            summary.md
+            transcript.md
+            frames/       # later
 ```
 
-## Three layers
 | Layer | Has an LLM? | Examples |
 |---|---|---|
-| Tools | No | `playlist.py`, `run.py`, `index.py` |
+| Tools | No | `playlist.py`, `run.py`, `index.py`, `ingest.py` |
 | Layla + domain instructions | Yes (this session) | triage, discussion, deep dive |
-| Ingest subagents | Yes (same login) | one per video, summarize transcript |
+| Summarizer subagent | Yes (same login) | `agent.py` → headless omp subagent, one per video |
 
 "YouTube agent" means Layla wearing `agents/youtube/AGENTS.md` — not a separate
 process.
@@ -87,17 +88,17 @@ pgvector at semantic search. At small N, Layla reasoning over `INDEX.md` beats
 vector matching.
 
 ## Ingest pipeline
+One command — `python3 -m agents.youtube.ingest <playlist-url>`:
 ```
 playlist url
-  -> playlist.py            (video ids + title/channel/duration)
+  -> playlist.py             (video ids + title/channel/duration)
   -> skip ids already stored
-  -> run.py --out-dir       (transcript.md per video)
-  -> subagent per video      (summary.md per video, parallel)
-  -> index.py               (INDEX.md)
+  -> per new video: run.py (transcript.md) -> agent.py (summary.md)
+  -> index.py                (INDEX.md)
   -> report to user
 ```
-Transcripts never enter the main session during ingest — that's the whole
-reason subagents are used here.
+Videos run sequentially. Transcripts never enter the main session during
+ingest — each summarizer subagent reads only its own transcript.
 
 ## Triage
 Read `INDEX.md`, then `summary.md` for `status: new` videos. Rank against what

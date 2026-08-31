@@ -50,5 +50,5 @@ pre-filtering, flag blockers explicitly.
 - System binaries, brew-managed and invoked as subprocesses, not pip packages:
   `yt-dlp` 2026.06.09 (required) and `ffmpeg` 8.1.1 (frames, not yet used).
   Full rationale in SPEC.md "Prerequisites".
-- Stored data lives in `data/`, which is gitignored — it's a local cache, not
-  source.
+- Stored data lives in `agents/youtube/data/`, which is gitignored — it's a
+  local cache, not source.

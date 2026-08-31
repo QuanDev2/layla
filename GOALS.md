@@ -61,5 +61,5 @@ drive triage, full text is on disk for when you go deep.
 ## Non-goals (for now)
 - No standalone orchestrator service.
 - No cron/scheduled runs.
-- No database — markdown files in `data/`.
+- No database — markdown files in `agents/youtube/data/`.
 - No private-playlist OAuth; unlisted playlists need no auth.

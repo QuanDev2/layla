@@ -1,8 +1,8 @@
 """INDEX.md regenerator for the video store.
 
-data/videos/*/summary.md -> parse frontmatter -> data/videos/INDEX.md
+agents/youtube/data/videos/*/summary.md -> parse frontmatter -> agents/youtube/data/videos/INDEX.md
 
-In: store root (default data/videos).
+In: store root (default: package-local data/videos).
 Out: JSON {ok, count, path} on stdout.
 State: rewrites <root>/INDEX.md.
 
@@ -13,14 +13,16 @@ import argparse
 import json
 import sys
 from pathlib import Path
+DEFAULT_ROOT = str(Path(__file__).resolve().parent / "data" / "videos")
+
 
 NAME = "youtube_index"
-DESCRIPTION = "Regenerate data/videos/INDEX.md from per-video summary frontmatter."
+DESCRIPTION = "Regenerate the video-store INDEX.md from per-video summary frontmatter."
 INPUT_SCHEMA = {
     "root": {
         "type": "string",
         "required": False,
-        "description": "Video store root; defaults to data/videos.",
+        "description": "Video store root; defaults to the package-local data/videos.",
     },
 }
 
@@ -47,7 +49,7 @@ def parse_frontmatter(text: str) -> dict:
     return out
 
 
-def invoke(root: str = "data/videos", **_kwargs) -> dict:
+def invoke(root: str = DEFAULT_ROOT, **_kwargs) -> dict:
     """Rebuild the store index from summary frontmatter.
 
     In: store root.
@@ -92,7 +94,7 @@ def invoke(root: str = "data/videos", **_kwargs) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=DESCRIPTION)
-    parser.add_argument("--root", default="data/videos", help="Video store root")
+    parser.add_argument("--root", default=DEFAULT_ROOT, help="Video store root")
     args = parser.parse_args()
 
     result = invoke(root=args.root)

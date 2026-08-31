@@ -15,7 +15,7 @@ instructions, and docs are in place. Frame extraction is specified but unbuilt.
 - **"YouTube agent" = Layla wearing `agents/youtube/AGENTS.md`**, not a process.
 
 ## Decisions made
-- No database. Markdown in `data/videos/` (gitignored). Postgres/pgvector only
+- No database. Markdown in `agents/youtube/data/videos/` (gitignored). Postgres/pgvector only
   when cross-video semantic search actually matters; markdown stays the source
   of truth so embedding later is a script, not a migration.
 - No cron. Unattended runs would need a paid API key for the reasoning step;
@@ -34,6 +34,8 @@ instructions, and docs are in place. Frame extraction is specified but unbuilt.
 |---|---|
 | `agents/youtube/playlist.py` | List playlist/video metadata via yt-dlp |
 | `agents/youtube/run.py` | Timestamped transcript, two sources with fallback |
+| `agents/youtube/agent.py` | Summarize one transcript via headless omp subagent |
+| `agents/youtube/ingest.py` | One-call ingest pipeline: transcript, summarize, reindex |
 | `agents/youtube/index.py` | Regenerate `INDEX.md` from summary frontmatter |
 | `agents/youtube/AGENTS.md` | Domain workflows: ingest, triage, deep dive |
 | `AGENTS.md` | Layla's identity, domain registry, mode split |

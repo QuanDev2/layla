@@ -1,3 +1,14 @@
+---
+status: in-progress
+updated: 2026-08-31
+verify.py: skipped
+agent.py: done
+ingest.py: done
+eval.py: not-started
+data_move: done
+docs: done
+---
+
 # Implementation plan — agent.py, verify.py, ingest.py, eval.py
 
 Self-contained build plan for a cold-start implementer. Rationale lives in
