@@ -110,22 +110,65 @@ Load that video's `transcript.md` into Layla's context. Timestamps let the user
 ask about a specific moment. Pasted screenshots carry a visible player
 timestamp, which Layla aligns with nearby transcript lines.
 
-## Frames — planned, not built
-Strategy is **lazy extraction**: don't pre-extract. The transcript flags where
-visuals matter ("as you can see in this diagram" at `[14:22]`), so fetch only
-that moment:
-```
-yt-dlp --download-sections "*14:20-14:25" -f 'bv[height<=720]' <url>
-ffmpeg -ss 00:14:22 -i clip.mp4 -frames:v 1 frames/00-14-22.png
-```
-For unattended batch ingest, where no one can guide it: interval sampling plus
-perceptual-hash dedupe (one tunable threshold) rather than ffmpeg scene
-detection, which trips on camera cuts and gestures in talking-head footage.
+## Frames — designed, not built
 
-Cost note: each image is ~1–1.5k tokens, so 50 slides ≈ 60k tokens. Text-only
-slides should be OCR'd (~100 tokens); only charts and diagrams need pixels.
+### Workflow
 
-Flag syntax above is unverified — needs a live test.
+Frames are fetched only for a video the user has picked for discussion, never
+at ingest. Triage uses summary + transcript only. Pick a video -> extract
+frames for that video alone -> discuss with transcript + relevant frames
+aligned by timestamp. Unpicked videos: dropped from the shortlist; their
+store entries stay.
+
+### Pipeline (cheap stages first)
+
+1. Sample one frame every 5s to disk.
+2. Dedupe consecutive runs — hash the slide region only (ROI), never the
+   whole frame.
+3. Duration filter: slide held >= 10s (dedupe run length x 5s). Relevance
+   router (cheap, local OCR): OCR words in the nearby transcript window ->
+   send to LLM; no overlap + long hold -> send (silent reading slide); no
+   overlap + short hold -> drop; charts (little/no text) -> send. Drops only
+   obvious trash, never replaces the LLM's judgment.
+4. LLM pass on survivors only: judge relevance + write the one-line
+   description in one call. Includes a "no visual content — discard"
+   verdict.
+
+### Solved: hybrid layouts (speaker + slide)
+
+Whole-frame hashing breaks when the speaker's face changes while the slide
+stays static. Solution: detect the slide ROI — the part of the frame that
+doesn't move — via temporal variance, hash only that. Speaker-only stretches
+have no static region -> no ROI -> no frames.
+
+### Solved: changing ROI mid-video
+
+Layouts change (full-slide -> side-by-side -> picture-in-picture). Two
+passes: (A) segment the video at persistent structural changes; (B) compute a
+fresh ROI per segment. Over-segmentation is safe, under-segmentation is
+fatal. Short segments fall back: neighbor ROI -> whole frame -> LLM decides.
+
+### Cost
+
+Extraction to disk is cheap; only loading frames into context costs. Each
+image is ~1–1.5k tokens; OCR text is ~100 tokens. Text-only slides may route
+through OCR-only description (deferred knob, v2).
+
+### Decided
+
+- Relevance: cheap OCR router + LLM judgment, in that order; the router drops
+  only obvious trash.
+- LLM verdicts include "no visual content — discard" (speaker-only frames).
+- Calibrate the 10s + variance thresholds on `ow1we5PzK-o` before trusting
+  them.
+- Text-slide OCR-only routing: deferred to v2; measure v1 spend first.
+- `frames.py` is its own tool; `agent.py` stays narrow.
+- Duration estimate = dedupe run length x 5s (±5s accepted); exact durations
+  later if stage 1 upgrades to slide-change detection.
+- No-slides outcome: talking-head video -> "no frames", zero LLM calls.
+
+The yt-dlp `--download-sections` flag syntax is unverified — the calibration
+run doubles as that test.
 
 ## Transcript sources
 `run.py` tries `youtube-transcript-api` first, then falls back to `yt-dlp`

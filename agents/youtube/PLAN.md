@@ -1,10 +1,11 @@
 ---
 status: in-progress
-updated: 2026-08-31
+updated: 2026-09-01
 verify.py: skipped
 agent.py: done
 ingest.py: done
 eval.py: not-started
+frames: not-started
 data_move: done
 docs: done
 ---
