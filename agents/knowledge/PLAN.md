@@ -272,6 +272,12 @@ Create empty `agents/knowledge/__init__.py` (0 bytes), matching
 `agents/__init__.py` and `agents/youtube/__init__.py`, so
 `python3 -m agents.knowledge.chunk` resolves.
 
+**Verification**
+
+Manual: `python3 -c "import agents.knowledge; print('ok')"` from the repo
+root — prints `ok`, no `ImportError`. Nothing else to check; an empty
+`__init__.py` has no behavior beyond importability.
+
 #### Step 2 — `agents/knowledge/chunk.py`: unit segmentation
 
 Boundaries are never derived from the file's own line breaks. A transcript may
@@ -336,6 +342,33 @@ returning frontmatter plus units):
   mislabeled or caption-free file still chunks instead of crashing.
 - Each chunk's `start`/`end` timestamps are the `stamp` of its first and last unit
   carrying one.
+
+**Verification**
+
+Manual — run `segment_units` against both fixtures and read the unit
+boundaries directly, no assertions:
+
+```
+python3 -c "
+from agents.knowledge.chunk import segment_units
+text = open('LESSONS-ai-native-sdlc-playbook.md').read()
+units = segment_units(text, 'article')
+print(len(units), 'units')
+for u in units[:8]:
+    print(u['index'], u.get('stamp'), repr(u['text'][:70]))
+"
+```
+
+then the same against
+`agents/youtube/data/videos/ow1we5PzK-o/transcript.md` (body only, after
+the frontmatter) with `source_kind='transcript'`.
+
+Read for: article units break at paragraph/heading boundaries with no unit
+spanning a blank line; any `#`-heading line is isolated as its own unit; a
+fenced code block (if the Lessons fixture has one) prints as a single unit
+even though it contains embedded newlines; transcript units number ~534,
+`stamp` is set on every one, and each unit's text starts right after its
+`[MM:SS]` marker with no marker leaking into two units.
 
 #### Step 3 — `agents/knowledge/heading_agent.py`: heading-insertion call
 
@@ -433,6 +466,34 @@ Rules:
 
 For `source_kind == "transcript"`, append: `"Blocks are transcript segments prefixed with [MM:SS]. Topic changes are where the speaker moves to a new subject."`
 
+**Verification**
+
+Manual, three runs — this step wraps a live LLM call, so "success" is
+read-and-judge, not asserted:
+
+```
+python3 -c "
+from agents.knowledge.chunk import segment_units
+from agents.knowledge.heading_agent import insert_headings
+text = open('agents/youtube/data/videos/ow1we5PzK-o/transcript.md').read().split('---', 2)[2]
+units = segment_units(text, 'transcript')
+r = insert_headings(units, 'transcript')
+print(r['backend'], len(r.get('points', [])))
+for p in r.get('points', []):
+    print(p['before_unit'], p['heading'], '|', units[p['before_unit']]['text'][:70])
+"
+```
+
+1. Against the transcript fixture: `backend == 'omp'`, points list
+   non-empty, and for each printed point the unit text actually matches
+   the anchor and heading topic — read a handful, not all.
+2. Against `LESSONS-ai-native-sdlc-playbook.md` (already has 18 real
+   headings): expect `points == []` — the model recognizing existing
+   structure and declining to add more is the pass condition, not an
+   empty result to be suspicious of.
+3. `KNOWLEDGE_LLM=off` re-run of either: `r['ok'] is False`,
+   `r['backend'] == 'off'`.
+
 #### Step 4 — Validation and repair
 
 In `chunk.py`: `validate_points(points, units) -> tuple[list, str | None]`
@@ -470,6 +531,39 @@ Applying accepted points produces `structured_text`: units re-joined in order wi
 exact slices of the source, re-joining cannot alter, drop, or duplicate text —
 Verification check 4 asserts this byte-for-byte.
 
+**Verification**
+
+Manual — hand-build a bad `points` list against a real fixture's units and
+read what comes back, no assertions:
+
+```
+python3 -c "
+from agents.knowledge.chunk import segment_units, validate_points
+units = segment_units(open('LESSONS-ai-native-sdlc-playbook.md').read(), 'article')
+def first6(i): return ' '.join(units[i]['text'].split()[:6])
+bad = [
+    {'before_unit': 9999, 'anchor': 'nonsense', 'heading': 'Out of range'},
+    {'before_unit': 5, 'anchor': first6(8), 'heading': 'Drifted anchor'},
+    {'before_unit': 3, 'anchor': first6(3), 'heading': 'Dup A'},
+    {'before_unit': 3, 'anchor': first6(3), 'heading': 'Dup B'},
+]
+points, msg = validate_points(bad, units)
+for p in points: print(p)
+print('message:', msg)
+"
+```
+
+Read for: the `before_unit: 9999` point is gone; the drifted one now reads
+`before_unit: 8` (moved to match its anchor, not left at 5); only one of
+the two `before_unit: 3` duplicates remains.
+
+Separately, force the two failure paths that produce a retry message, not
+just a silent repair: an anchor with no match anywhere in `±5` units, and a
+hand-built `points` list whose gaps make one section exceed `MAX_CHARS`.
+Read that `msg` names the specific unit/section, e.g. contains `"section
+starting at block"` or the dropped anchor's text — a generic string here is
+a bug per decision 16 / `agents/youtube/PLAN.md:109-110`.
+
 #### Step 5 — Structural split
 
 `split_sections(units, points) -> list[dict]` cuts at every heading — both the
@@ -497,6 +591,27 @@ model's window. Truncating would lose code and splitting a code example arbitrar
 is worse than one blunt vector; the flag makes it a known limitation rather than a
 silent one, and `format_candidates` surfaces it.
 
+**Verification**
+
+Manual — run the full chunker on both fixtures and read the per-chunk
+table:
+
+```
+python3 -c "
+from agents.knowledge import chunk
+r = chunk.invoke('LESSONS-ai-native-sdlc-playbook.md', kind='article', title='Lessons')
+for c in r['chunks']:
+    print(c['chunk_index'], c['chars'], c['over_cap'], c['prefix'])
+"
+```
+
+Read for: `chars` clusters near 1,800 with none over 7,000 unless
+`over_cap` is `True`; chunk count and prefixes line up with the fixture's
+real heading structure in document order (none skipped, none repeated);
+add `c['content'][:80]` and confirm no chunk body starts or ends
+mid-sentence. If the fixture has a fenced code block, confirm it sits
+wholly inside exactly one chunk, never split across two.
+
 #### Step 6 — Context prefix
 
 `build_prefix(source_kind, doc_title, heading_path, start=None, end=None, channel=None) -> str`
@@ -516,6 +631,26 @@ embedded.
 `transcript.md`'s frontmatter carries `video_id`/`url`/`language` only, while
 `title`/`channel` live in the sibling `summary.md` (`agents/youtube/index.py:_FIELDS`).
 Whichever caller has that metadata passes it in.
+
+**Verification**
+
+Manual — call it directly with the cases the template table has to cover,
+and read each string:
+
+```
+python3 -c "
+from agents.knowledge.chunk import build_prefix
+print(repr(build_prefix('article', 'Doc Title', ['Intro', 'Sub'])))
+print(repr(build_prefix('article', '', ['Intro'])))
+print(repr(build_prefix('transcript', 'Video', ['Section'], start='12:34', end='15:02', channel='Chan')))
+print(repr(build_prefix('transcript', 'Video', [], start='0:00', end='2:00', channel='')))
+"
+```
+
+Read for: the full article case reads `Doc Title > Intro > Sub`; missing
+title degrades to `Intro`, not `' > Intro'`; the full transcript case reads
+`Video — Chan [12:34–15:02] > Section`; missing channel and empty heading
+path degrades to `Video [0:00–2:00]` with no stray ` — ` or ` > `.
 
 #### Step 7 — Public API and candidate table
 
@@ -559,45 +694,41 @@ Empty or whitespace-only input returns
 `{"ok": False, "error": "empty document"}`; a missing path returns
 `{"ok": False, "error": "file not found: <path>"}`. Neither raises.
 
-### Critical files & anchors
+**Verification**
 
-|Path|Anchor|Why|
-|---|---|---|
-|`agents/youtube/agent.py`|`invoke()` at 121-158, `build_system_prompt()` at 100-118|The exact `omp -p` flag set, timeout/guard pattern, file-output contract, and retry-feedback wording to copy in `heading_agent.py`.|
-|This file|Decisions 1-13 vs. 14-19 above|Decisions 1-13 predate this build spec; 14-19 settle and extend decision 14 for it. None of decisions 1-19 are open for re-litigation.|
-|`agents/youtube/AGENTS.md`|Lines 116-122|Transcript format guarantees: one `[MM:SS]` segment per line, rolling captions already collapsed. The transcript parser depends on both.|
-|`agents/youtube/index.py`|`parse_frontmatter()` at 32-38, `_FIELDS` at 29|Frontmatter loop to mirror, and confirmation that `title`/`channel` live in `summary.md`, not `transcript.md`.|
-|`agents/youtube/PLAN.md`|Lines 94-113|Established scoped-feedback retry contract that `validate_points` messages must satisfy.|
-
-### Verification
-
-Run from the repo root. Fixtures confirmed present: the transcript is 544 lines /
-22,106 chars with 534 `[MM:SS]` segments (auto-generated captions — the hardest
-boundary case), and `LESSONS-ai-native-sdlc-playbook.md` is 236 lines / 13,243 chars
-with 18 heading lines. `omp` must be on PATH for checks 1 and 3.
+Manual — this is the full pipeline through the public API and CLI, what
+everything above ships to. The steps above verify their own internals;
+this verifies the assembled result. Run from the repo root. Fixtures
+confirmed present: the transcript is 544 lines / 22,106 chars with 534
+`[MM:SS]` segments (auto-generated captions — the hardest boundary case),
+and `LESSONS-ai-native-sdlc-playbook.md` is 236 lines / 13,243 chars with
+18 heading lines. `omp` must be on PATH for checks 1 and 3.
 
 1. **Already-structured article passes through.**
    `python3 -m agents.knowledge.chunk LESSONS-ai-native-sdlc-playbook.md --kind article --title "LESSONS: AI-native SDLC playbook" --table`
-   Expect `backend: "passthrough"` with `headings_inserted: 0` (18 real headings
-   already cover its topics), roughly 8-14 chunks, every `chars` ≤ 7,000, and each
-   prefix reading `LESSONS: AI-native SDLC playbook > <one of its real headings>`.
+   Expect `backend: "passthrough"` with `headings_inserted: 0` (18 real
+   headings already cover its topics), roughly 8-14 chunks, every `chars`
+   ≤ 7,000, and each prefix reading `LESSONS: AI-native SDLC playbook >
+   <one of its real headings>`.
 
 2. **Deterministic path produces the same split.**
    `KNOWLEDGE_LLM=off python3 -m agents.knowledge.chunk LESSONS-ai-native-sdlc-playbook.md --kind article --title "LESSONS: AI-native SDLC playbook"`
-   Expect `backend: "fallback"` and an identical chunk count and identical `content`
-   values to check 1 — the article's own headings drive the split, so the LLM step
-   changing nothing must be observable, not assumed.
+   Expect `backend: "fallback"` and an identical chunk count and identical
+   `content` values to check 1 — the article's own headings drive the
+   split, so the LLM step changing nothing must be observable, not
+   assumed.
 
 3. **Structureless transcript gains headings and timestamps.**
    `python3 -m agents.knowledge.chunk agents/youtube/data/videos/ow1we5PzK-o/transcript.md --kind transcript --table`
-   Expect `headings_inserted` ≥ 5, roughly 12-16 chunks from 22,106 chars, every
-   chunk carrying `start`/`end` `[MM:SS]` strings with `start` strictly increasing
-   across `chunk_index`, and each prefix ending in an inserted section title. No
-   chunk body may begin or end mid-`[MM:SS]`-line — grep each `content` for
-   `\[\d+:\d\d\]` and confirm every match sits at a line start.
+   Expect `headings_inserted` ≥ 5, roughly 12-16 chunks from 22,106 chars,
+   every chunk carrying `start`/`end` `[MM:SS]` strings with `start`
+   strictly increasing across `chunk_index`, and each prefix ending in an
+   inserted section title. No chunk body may begin or end
+   mid-`[MM:SS]`-line — grep each `content` for `\[\d+:\d\d\]` and confirm
+   every match sits at a line start.
 
-4. **No text lost, added, or duplicated** (proves both the anti-hallucination
-   guarantee of step 2 and zero overlap):
+4. **No text lost, added, or duplicated** (proves both the
+   anti-hallucination guarantee of step 2 and zero overlap):
    ```
    python3 -c "
    from agents.knowledge import chunk
@@ -609,22 +740,34 @@ with 18 heading lines. `omp` must be on PATH for checks 1 and 3.
    print('MATCH' if norm(bodies) == src else 'MISMATCH')
    "
    ```
-   Must print `MATCH`. A mismatch means the splitter dropped or duplicated source
-   text, or the model's output leaked into content.
+   Must print `MATCH`. A mismatch means the splitter dropped or duplicated
+   source text, or the model's output leaked into content.
 
 5. **Transcript survives with no backend.**
    `KNOWLEDGE_LLM=off python3 -m agents.knowledge.chunk agents/youtube/data/videos/ow1we5PzK-o/transcript.md --kind transcript --table`
-   Expect `backend: "fallback"`, still-valid chunks under the cap with correct
-   timestamp ranges, and prefixes carrying the timestamp range with no section title.
-   Check 4's identity must still print `MATCH` under this backend.
+   Expect `backend: "fallback"`, still-valid chunks under the cap with
+   correct timestamp ranges, and prefixes carrying the timestamp range
+   with no section title. Check 4's identity must still print `MATCH`
+   under this backend.
 
 6. **Bad model output is caught, not trusted.** Call
-   `chunk.validate_points` directly against the units of any fixture, with a
-   hand-built list containing an out-of-range `before_unit`, a point whose `anchor`
-   matches the unit three positions below its stated `before_unit`, and a duplicate
-   index. Expect the out-of-range point dropped, the drifted point silently moved to
-   the matching unit, the duplicate collapsed, and a returned message naming the
-   dropped point specifically rather than a generic failure string.
+   `chunk.validate_points` directly against the units of any fixture, with
+   a hand-built list containing an out-of-range `before_unit`, a point
+   whose `anchor` matches the unit three positions below its stated
+   `before_unit`, and a duplicate index. Expect the out-of-range point
+   dropped, the drifted point silently moved to the matching unit, the
+   duplicate collapsed, and a returned message naming the dropped point
+   specifically rather than a generic failure string.
+
+### Critical files & anchors
+
+|Path|Anchor|Why|
+|---|---|---|
+|`agents/youtube/agent.py`|`invoke()` at 121-158, `build_system_prompt()` at 100-118|The exact `omp -p` flag set, timeout/guard pattern, file-output contract, and retry-feedback wording to copy in `heading_agent.py`.|
+|This file|Decisions 1-13 vs. 14-19 above|Decisions 1-13 predate this build spec; 14-19 settle and extend decision 14 for it. None of decisions 1-19 are open for re-litigation.|
+|`agents/youtube/AGENTS.md`|Lines 116-122|Transcript format guarantees: one `[MM:SS]` segment per line, rolling captions already collapsed. The transcript parser depends on both.|
+|`agents/youtube/index.py`|`parse_frontmatter()` at 32-38, `_FIELDS` at 29|Frontmatter loop to mirror, and confirmation that `title`/`channel` live in `summary.md`, not `transcript.md`.|
+|`agents/youtube/PLAN.md`|Lines 94-113|Established scoped-feedback retry contract that `validate_points` messages must satisfy.|
 
 ### Assumptions & contingencies
 
