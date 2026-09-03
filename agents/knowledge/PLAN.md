@@ -79,6 +79,27 @@ read it before re-litigating anything below.
     `kind='synthesis'`, not just source excerpts (`kind='excerpt'`) — often
     more valuable than the raw quote, schema already supports it at no
     extra cost.
+13. **`documents` and `snippets` have distinct roles — never redundant.**
+    `documents.raw_text` is pure archive/provenance (audit trail, dedup
+    check on re-fetching a known URL); it is never searched directly.
+    `snippets` is the only retrievable/embedded unit. "Keep the whole
+    article" does not mean copying `raw_text` into one giant snippet — an
+    entire long article embedded as a single vector produces a mushy,
+    undiscriminating representation. It means chunking the whole document
+    into several coherent snippets (proposed conversationally, same
+    free-form flow as a partial keep), just more of them. Retrieval
+    (`search.py`) only ever queries `snippets`; `documents` is joined back
+    afterward solely to attach source `title`/`url`/`ingested_at` to a hit.
+14. **Chunking is structural, not fixed-size, and capped by the embedding
+    model's context window.** Boundaries follow the document's own
+    structure (headings, paragraph groups, complete code examples) — never
+    split mid-code-block or mid-sentence. Hard ceiling: 2,048 tokens per
+    snippet (EmbeddingGemma's context limit, the locked local-swap target);
+    a long section splits at its next natural sub-boundary rather than
+    truncating. No minimum size — a one-paragraph snippet is fine if it's
+    a complete, useful excerpt. Layla proposes the boundaries and shows
+    them before writing, same free-form/confirm flow as decision 10 —
+    chunking is never silent, even for a "keep whole" article.
 
 ## Schema (drafted, not yet built)
 
@@ -162,6 +183,33 @@ agents/knowledge/
   curated on the way in (nothing enters `snippets` without an explicit
   keep decision), so it grows into a redundancy problem far slower than a
   system that logs everything by default.
+
+## Future migration tasks
+
+- **Re-embed job: Voyage → EmbeddingGemma-300M Q8_0.** Triggered whenever
+  the switch to the local model actually happens (e.g. Voyage's free tier
+  runs out). Not needed for the PoC — noted here so it isn't rediscovered
+  as a surprise later.
+  - **What it does:** for every row where `embedding_model != 'embeddinggemma-q8'`,
+    re-run the already-stored `content` (untouched by this job) through
+    EmbeddingGemma and overwrite `embedding` + `embedding_model` on that row.
+  - **Why it's safe:** `content` is the source of truth; `embedding` is a
+    derived, regenerable index. Nothing about switching providers touches
+    the actual text, so no data is at risk — only the vectors go stale
+    until this job runs.
+  - **Why it's cheap:** the destination model is local and free — this is
+    CPU time on-device, not a paid API bill, unlike a hypothetical reverse
+    migration.
+  - **What still works before the migration runs:** FTS5 keyword search
+    over `content` is completely unaffected by which embedding model is
+    active — old rows stay fully keyword-searchable the entire time. Only
+    vector/semantic search on unmigrated rows is degraded in the gap
+    between switching the active provider and running this job.
+  - **Guard while both embedding spaces briefly coexist:** `search.py`
+    should only run cosine similarity against rows whose `embedding_model`
+    matches the currently active provider — comparing vectors across
+    incompatible spaces produces silently wrong rankings, not an error, so
+    this must be an explicit filter, not an oversight.
 
 ## Not started
 
