@@ -207,7 +207,7 @@ agents/knowledge/
   search.py         — hybrid search: FTS + vector + fusion
   summarizer_agent.py  — bulk-import only; bootstrapped subagent, mirrors
                           agents/youtube/agent.py
-  data/             — gitignored: knowledge.db
+  data/             — gitignored: knowledge.db; also holds verification fixtures (LESSONS-ai-native-sdlc-playbook.md, ai-native-sdlc-playbook.html)
 ```
 
 ## Considered and deferred
@@ -351,7 +351,7 @@ boundaries directly, no assertions:
 ```
 python3 -c "
 from agents.knowledge.chunk import segment_units
-text = open('LESSONS-ai-native-sdlc-playbook.md').read()
+text = open('agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md').read()
 units = segment_units(text, 'article')
 print(len(units), 'units')
 for u in units[:8]:
@@ -487,7 +487,7 @@ for p in r.get('points', []):
 1. Against the transcript fixture: `backend == 'omp'`, points list
    non-empty, and for each printed point the unit text actually matches
    the anchor and heading topic — read a handful, not all.
-2. Against `LESSONS-ai-native-sdlc-playbook.md` (already has 18 real
+2. Against `agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md` (already has 18 real
    headings): expect `points == []` — the model recognizing existing
    structure and declining to add more is the pass condition, not an
    empty result to be suspicious of.
@@ -539,7 +539,7 @@ read what comes back, no assertions:
 ```
 python3 -c "
 from agents.knowledge.chunk import segment_units, validate_points
-units = segment_units(open('LESSONS-ai-native-sdlc-playbook.md').read(), 'article')
+units = segment_units(open('agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md').read(), 'article')
 def first6(i): return ' '.join(units[i]['text'].split()[:6])
 bad = [
     {'before_unit': 9999, 'anchor': 'nonsense', 'heading': 'Out of range'},
@@ -599,7 +599,7 @@ table:
 ```
 python3 -c "
 from agents.knowledge import chunk
-r = chunk.invoke('LESSONS-ai-native-sdlc-playbook.md', kind='article', title='Lessons')
+r = chunk.invoke('agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md', kind='article', title='Lessons')
 for c in r['chunks']:
     print(c['chunk_index'], c['chars'], c['over_cap'], c['prefix'])
 "
@@ -701,18 +701,18 @@ everything above ships to. The steps above verify their own internals;
 this verifies the assembled result. Run from the repo root. Fixtures
 confirmed present: the transcript is 544 lines / 22,106 chars with 534
 `[MM:SS]` segments (auto-generated captions — the hardest boundary case),
-and `LESSONS-ai-native-sdlc-playbook.md` is 236 lines / 13,243 chars with
+and `agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md` is 236 lines / 13,243 chars with
 18 heading lines. `omp` must be on PATH for checks 1 and 3.
 
 1. **Already-structured article passes through.**
-   `python3 -m agents.knowledge.chunk LESSONS-ai-native-sdlc-playbook.md --kind article --title "LESSONS: AI-native SDLC playbook" --table`
+   `python3 -m agents.knowledge.chunk agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md --kind article --title "LESSONS: AI-native SDLC playbook" --table`
    Expect `backend: "passthrough"` with `headings_inserted: 0` (18 real
    headings already cover its topics), roughly 8-14 chunks, every `chars`
    ≤ 7,000, and each prefix reading `LESSONS: AI-native SDLC playbook >
    <one of its real headings>`.
 
 2. **Deterministic path produces the same split.**
-   `KNOWLEDGE_LLM=off python3 -m agents.knowledge.chunk LESSONS-ai-native-sdlc-playbook.md --kind article --title "LESSONS: AI-native SDLC playbook"`
+   `KNOWLEDGE_LLM=off python3 -m agents.knowledge.chunk agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md --kind article --title "LESSONS: AI-native SDLC playbook"`
    Expect `backend: "fallback"` and an identical chunk count and identical
    `content` values to check 1 — the article's own headings drive the
    split, so the LLM step changing nothing must be observable, not
