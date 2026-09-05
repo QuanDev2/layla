@@ -4,3 +4,7 @@ data/
 __pycache__/
 *.pyc
 .venv/
+
+# eval harness scratch — dev-only, not source
+agents/knowledge/eval.md
+agents/knowledge/eval_runs/
