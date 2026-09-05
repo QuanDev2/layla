@@ -33,7 +33,7 @@ INPUT_SCHEMA = {
 }
 
 DEFAULT_MODEL = "anthropic/claude-haiku-5"
-DEFAULT_EFFORT = "low"
+DEFAULT_EFFORT = "medium"
 TOOL_NAMES = ["read", "write"]
 
 # The anthropic SDK takes its own model id, unrelated to omp's provider-prefixed
@@ -74,7 +74,11 @@ Rules:
 - The ~1800 character target describes how much of ONE topic to cover before
   the next heading; it is not a floor to hit by merging distinct topics
   together. Never leave a section longer than 7000 characters.
-- If the document already has clear headings covering its topics, write [] and stop.
+- Existing headings do not excuse you from segmenting the rest of the document —
+  apply the topic-change and ~1800/7000-character rules above to every unheaded
+  stretch, including everything before the first existing heading. An existing
+  heading only covers the content it directly introduces, not what precedes it.
+  Write [] only if that process finds nothing left to insert.
 - Write only the JSON array. No prose, no code fence, no document text."""
 
 _TRANSCRIPT_ADDENDUM = (
