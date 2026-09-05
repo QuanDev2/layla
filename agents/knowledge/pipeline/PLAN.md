@@ -1,8 +1,10 @@
 ---
 status: design
-updated: 2026-09-03
+updated: 2026-09-05
 schema: drafted
-scripts: not-started
+scripts: chunk.py (steps 1-2) and heading_agent.py (step 3) built and committed;
+  judge.py and eval.py also built (dev-only grading harness, not in original
+  plan — see "Grading harness" note under Step 3); step 4 (validate_points) next
 ---
 
 # Knowledge domain — design log
@@ -193,21 +195,52 @@ flowchart TD
     M --> N[Agent synthesizes answer, cites source]
 ```
 
-## Repo layout (planned, not yet built)
+## Repo layout (chunk.py/heading_agent.py built; rest planned)
 
 ```
 agents/knowledge/
   AGENTS.md         — domain instructions Layla reads for knowledge-touching requests
   db.py             — schema + connection helper
   ingest.py         — capture: fetch content, create documents row
-  chunk.py          — unit segmentation, structural splitter, context prefixes
-  heading_agent.py  — heading-insertion call; pluggable backend (omp | anthropic | off)
+  chunk.py          — unit segmentation (built, steps 1-2), structural splitter +
+                       context prefixes (steps 4-6, not yet built)
+  heading_agent.py  — heading-insertion call; pluggable backend (omp | anthropic |
+                       off) (built, step 3)
+  judge.py          — NOT in original plan. Grades heading_agent's points for
+                       essence-vs-topic-label quality (score, grade, reasoning,
+                       excerpt per heading). Production module, omp default,
+                       shares KNOWLEDGE_LLM with heading_agent.py. How it plugs
+                       into the chunk.py pipeline (synchronous gate vs. offline
+                       audit) is not yet decided — see Step 3 note below.
+  eval.py           — NOT in original plan, NOT production. Dev-only manual
+                       tuning harness: runs heading_agent + judge.py once at
+                       whatever model/effort heading_agent.py currently
+                       defaults to, across a fixed doc set, appends a
+                       human-readable report to eval.md. No config sweep —
+                       unlike the candidate-comparison eval.py sketched for
+                       agents/youtube/PLAN.md, this one exists to eyeball
+                       prompt/model changes by hand, not to auto-pick a winner.
   triage.py         — write snippets from triage decisions
   embed.py          — provider abstraction (Voyage now, swappable to local)
   search.py         — hybrid search: FTS + vector + fusion
   summarizer_agent.py  — bulk-import only; bootstrapped subagent, mirrors
                           agents/youtube/agent.py
-  data/             — gitignored: knowledge.db; also holds verification fixtures (LESSONS-ai-native-sdlc-playbook.md, ai-native-sdlc-playbook.html)
+  data/             — gitignored: knowledge.db; also holds verification
+                       fixtures. Current set (2026-09-05): data/articles/
+                       (2 articles — one already has real headings covering
+                       most of it, one is structureless) and data/videos/
+                       (4 YouTube transcripts, auto-generated captions).
+                       The original LESSONS-ai-native-sdlc-playbook.md fixture
+                       (18 headings, used below as the canonical
+                       "already-fully-structured, expect []" case) was
+                       removed and not replaced — checks below that reference
+                       it need a new fixture with that property before they
+                       can run as written.
+  eval.md           — gitignored, NOT committed. Local log of eval.py runs
+                       (model/effort tried, per-heading scores, findings).
+                       Exists only in this checkout, not on a fresh clone —
+                       if you need the history behind a decision in this
+                       plan, check there first, but don't assume it's there.
 ```
 
 ## Considered and deferred
@@ -351,13 +384,12 @@ boundaries directly, no assertions:
 ```
 python3 -c "
 from agents.knowledge.chunk import segment_units
-text = open('agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md').read()
+text = open('agents/knowledge/data/articles/3-years-of-graph-engineering-with-langgraph.md').read()
 units = segment_units(text, 'article')
 print(len(units), 'units')
 for u in units[:8]:
     print(u['index'], u.get('stamp'), repr(u['text'][:70]))
 "
-```
 
 then the same against
 `agents/youtube/data/videos/ow1we5PzK-o/transcript.md` (body only, after
@@ -365,10 +397,10 @@ the frontmatter) with `source_kind='transcript'`.
 
 Read for: article units break at paragraph/heading boundaries with no unit
 spanning a blank line; any `#`-heading line is isolated as its own unit; a
-fenced code block (if the Lessons fixture has one) prints as a single unit
-even though it contains embedded newlines; transcript units number ~534,
-`stamp` is set on every one, and each unit's text starts right after its
-`[MM:SS]` marker with no marker leaking into two units.
+fenced code block (if the fixture has one) prints as a single unit even
+though it contains embedded newlines; transcript units number ~534, `stamp`
+is set on every one, and each unit's text starts right after its `[MM:SS]`
+marker with no marker leaking into two units.
 
 #### Step 3 — `agents/knowledge/heading_agent.py`: heading-insertion call
 
@@ -387,9 +419,36 @@ NAME = "knowledge_heading_inserter"
 DESCRIPTION = "Propose heading insertion points for a document that lacks usable structure."
 
 DEFAULT_MODEL = "anthropic/claude-haiku-5"
-DEFAULT_EFFORT = "low"
+DEFAULT_EFFORT = "medium"
 TOOL_NAMES = ["read", "write"]
 ```
+
+**Built and committed with two changes discovered after this spec was written**
+(see `eval.md` for the runs behind these, gitignored/local only):
+
+- `DEFAULT_EFFORT` shipped as `"medium"`, not `"low"` — compared across the
+  fixture set (`eval.py`, dev-only harness, see Repo layout above); `low`
+  produced comparable essence-quality scores but consistently worse anchor
+  placement (near-0 accuracy vs. the same doc under `medium`), and `medium`'s
+  extra thinking budget is cheap relative to the failure mode it avoids.
+- The abstain rule (below, "if the document already has clear headings...")
+  was under-specified and got fixed. The original wording let the model treat
+  *any* existing heading — including a trailing FAQ or "Key Takeaways"
+  section covering a fraction of the document — as license to write `[]` for
+  the whole thing, reproduced 3x on the flowtivity-guide fixture (0 headings
+  every time despite ~90% of the doc being one unheaded block). Fixed by
+  tying "already covered" to the same 1800/7000-char segmentation rule that
+  already governs insertion density, so abstaining is the *result* of
+  applying that rule everywhere and finding nothing to do, not a separate
+  gate a model can satisfy with one token heading. Current prompt text:
+  "Existing headings do not excuse you from segmenting the rest of the
+  document — apply the topic-change and ~1800/7000-character rules above to
+  every unheaded stretch, including everything before the first existing
+  heading. An existing heading only covers the content it directly
+  introduces, not what precedes it. Write `[]` only if that process finds
+  nothing left to insert." Confirmed fixed: the same fixture went from 0
+  headings (3 separate runs) to a real split spread across the previously
+  unheaded body, not one heading for the whole blob.
 
 `insert_headings(units: list[dict], source_kind: str, model=DEFAULT_MODEL, effort=DEFAULT_EFFORT, feedback=None) -> dict`
 
@@ -444,6 +503,11 @@ then `json.loads` the first content block's text. Missing `ANTHROPIC_API_KEY` �
 `agent.py:100-118` including its `"# Previous attempt failed\n" + feedback +
 "\nFix exactly these issues. Change nothing else."` retry block):
 
+**Stale as originally drafted — this is the actual, committed prompt** (heading_agent.py
+`_BASE_PROMPT`), which is meaningfully more detailed than the first draft below it used
+to be: it adds the essence-vs-topic-label rubric with examples, the per-list-item
+heading rule, and the abstain-rule fix described above.
+
 ```
 You mark section boundaries in a document. You never rewrite, summarize, or
 reproduce its text.
@@ -457,10 +521,32 @@ Write a JSON array. Each element marks one heading to insert:
 Rules:
 - before_unit is the number of the block the heading goes immediately BEFORE.
 - anchor must copy the first six words of block N verbatim, so placement is verifiable.
-- heading is your own short title (under 80 characters), not a quote from the text.
-- Insert a heading only where the topic genuinely changes. Aim for sections of
-  roughly 1800 characters; never leave a section longer than 7000 characters.
-- If the document already has clear headings covering its topics, write [] and stop.
+- heading distils the essence of the section: the specific insight, argument, or
+  decision it makes — not just the subject it discusses. Positional labels
+  ("Section 3", "Continued", "More details") always fail. A topic label also
+  fails even though it names the right subject, because it says nothing about
+  it — only an essence-capturing heading, stating what the section actually
+  concludes or argues, passes. Examples:
+    - weak topic label: "Vector Backend" -> strong essence: "Why brute-force
+      cosine beats an ANN index here"
+    - weak topic label: "Creator-Verifier Pattern" -> strong essence: "One
+      agent writes, another checks — catches errors the writer can't see in
+      itself"
+  heading is your own words, under 80 characters, never a verbatim quote from
+  the text.
+- Insert a heading at every genuine topic change, including a new item in a
+  named list (one of several patterns, steps, or techniques) — each gets its
+  own heading even if the resulting section is far shorter than 1800
+  characters. A later search for one specific item must land on a heading
+  naming that item, not one naming the whole list.
+- The ~1800 character target describes how much of ONE topic to cover before
+  the next heading; it is not a floor to hit by merging distinct topics
+  together. Never leave a section longer than 7000 characters.
+- Existing headings do not excuse you from segmenting the rest of the document —
+  apply the topic-change and ~1800/7000-character rules above to every unheaded
+  stretch, including everything before the first existing heading. An existing
+  heading only covers the content it directly introduces, not what precedes it.
+  Write [] only if that process finds nothing left to insert.
 - Write only the JSON array. No prose, no code fence, no document text.
 ```
 
@@ -487,10 +573,13 @@ for p in r.get('points', []):
 1. Against the transcript fixture: `backend == 'omp'`, points list
    non-empty, and for each printed point the unit text actually matches
    the anchor and heading topic — read a handful, not all.
-2. Against `agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md` (already has 18 real
-   headings): expect `points == []` — the model recognizing existing
-   structure and declining to add more is the pass condition, not an
-   empty result to be suspicious of.
+2. Against a fixture that already has clear headings covering its topics:
+   expect `points == []` — the model recognizing existing structure and
+   declining to add more is the pass condition, not an empty result to be
+   suspicious of. **No such fixture currently exists in `data/`** — the
+   original (`LESSONS-ai-native-sdlc-playbook.md`, 18 headings) was removed
+   and not replaced (see Repo layout above). Supply one before running this
+   check.
 3. `KNOWLEDGE_LLM=off` re-run of either: `r['ok'] is False`,
    `r['backend'] == 'off'`.
 
@@ -504,13 +593,31 @@ offenders like `agents/youtube/PLAN.md:109-110` requires — never a blanket str
 
 1. Drop non-dict elements and elements missing `before_unit` or `heading`.
 2. Coerce `before_unit` to `int`; reject out of `0..len(units)`.
-3. Anchor repair: compare `anchor`'s first six whitespace-separated words,
-   casefolded and stripped of a leading `[MM:SS]` marker, against
-   `units[before_unit]["text"]`. On mismatch, scan `before_unit ± ANCHOR_WINDOW`
-   for a unit whose first six words match and move the point there. No match in the
-   window → drop the point and record it. Unit indices drift far less than line
-   numbers did, since a unit is a whole paragraph or segment, but the echo stays as
-   the correctness check.
+3. Anchor repair: normalize both sides before comparing — casefold, strip a
+   leading `[MM:SS]` marker, and strip markdown/punctuation decoration
+   (`**bold**`, quotes, stray commas) per word. **Confirmed necessary, not
+   speculative**: `eval.py`'s first cut compared raw whitespace-split words
+   and got a ~0% match rate on nearly every fixture, purely from counting
+   `[MM:SS]` and `**`/quote characters as part of word one — see `_normalize_anchor`
+   in `eval.py` for the working implementation to port. Two real (non-bug)
+   patterns remain after normalizing, both confirmed against live output:
+     - **Truncated but correct prefix**: the model sometimes gives fewer than
+       six words (e.g. 5 of 6) when a caption unit is very short — every word
+       given is a verbatim-correct prefix, just incomplete. Compare as a
+       prefix match, not exact equality, or these get wrongly dropped.
+     - **Boundary splice**: auto-generated captions fragment sentences across
+       many short `[MM:SS]` units, so the natural six-word anchor phrase
+       often starts mid-unit or spans into the next one (e.g. unit N ends
+       "...one of the first", unit N+1 begins "benchmarks that..."; anchor is
+       "one of the first benchmarks that"). This is what `ANCHOR_WINDOW` is
+       for — the true target is usually within a few units either way — but
+       don't expect prefix-matching alone to fix it; the window scan is load
+       -bearing for this case specifically.
+   On mismatch after normalizing, scan `before_unit ± ANCHOR_WINDOW` for a
+   unit whose first six words match (prefix-tolerant) and move the point
+   there. No match in the window → drop the point and record it. Unit
+   indices drift far less than line numbers did, since a unit is a whole
+   paragraph or segment, but the echo stays as the correctness check.
 4. Reject empty headings and headings over 80 chars; strip any leading `#` the model
    added, since `chunk.py` writes the `##` marker itself.
 5. Sort by `before_unit`; drop duplicates at the same index, keeping the first.
@@ -539,7 +646,7 @@ read what comes back, no assertions:
 ```
 python3 -c "
 from agents.knowledge.chunk import segment_units, validate_points
-units = segment_units(open('agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md').read(), 'article')
+units = segment_units(open('agents/knowledge/data/articles/3-years-of-graph-engineering-with-langgraph.md').read(), 'article')
 def first6(i): return ' '.join(units[i]['text'].split()[:6])
 bad = [
     {'before_unit': 9999, 'anchor': 'nonsense', 'heading': 'Out of range'},
@@ -593,13 +700,13 @@ silent one, and `format_candidates` surfaces it.
 
 **Verification**
 
-Manual — run the full chunker on both fixtures and read the per-chunk
+Manual — run the full chunker on an available fixture and read the per-chunk
 table:
 
 ```
 python3 -c "
 from agents.knowledge import chunk
-r = chunk.invoke('agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md', kind='article', title='Lessons')
+r = chunk.invoke('agents/knowledge/data/articles/3-years-of-graph-engineering-with-langgraph.md', kind='article', title='LangGraph retrospective')
 for c in r['chunks']:
     print(c['chunk_index'], c['chars'], c['over_cap'], c['prefix'])
 "
@@ -698,21 +805,27 @@ Empty or whitespace-only input returns
 
 Manual — this is the full pipeline through the public API and CLI, what
 everything above ships to. The steps above verify their own internals;
-this verifies the assembled result. Run from the repo root. Fixtures
+this verifies the assembled result. Run from the repo root. Fixture
 confirmed present: the transcript is 544 lines / 22,106 chars with 534
-`[MM:SS]` segments (auto-generated captions — the hardest boundary case),
-and `agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md` is 236 lines / 13,243 chars with
-18 heading lines. `omp` must be on PATH for checks 1 and 3.
+`[MM:SS]` segments (auto-generated captions — the hardest boundary case).
+`omp` must be on PATH for checks 1 and 3.
+
+**Checks 1-2 need a fixture that doesn't currently exist in `data/`** — a
+document with real headings already covering all its topics, so the
+"already-structured, pass through unchanged" path has something to run
+against. The original (`LESSONS-ai-native-sdlc-playbook.md`, 236 lines,
+13,243 chars, 18 heading lines) was removed and not replaced (see Repo
+layout above). Supply one, adjust the specific numbers below to match it,
+then run:
 
 1. **Already-structured article passes through.**
-   `python3 -m agents.knowledge.chunk agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md --kind article --title "LESSONS: AI-native SDLC playbook" --table`
-   Expect `backend: "passthrough"` with `headings_inserted: 0` (18 real
-   headings already cover its topics), roughly 8-14 chunks, every `chars`
-   ≤ 7,000, and each prefix reading `LESSONS: AI-native SDLC playbook >
-   <one of its real headings>`.
+   `python3 -m agents.knowledge.chunk <fixture> --kind article --title "<title>" --table`
+   Expect `backend: "passthrough"` with `headings_inserted: 0` (its real
+   headings already cover its topics), every `chars` ≤ 7,000, and each
+   prefix reading `<title> > <one of its real headings>`.
 
 2. **Deterministic path produces the same split.**
-   `KNOWLEDGE_LLM=off python3 -m agents.knowledge.chunk agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md --kind article --title "LESSONS: AI-native SDLC playbook"`
+   `KNOWLEDGE_LLM=off python3 -m agents.knowledge.chunk <fixture> --kind article --title "<title>"`
    Expect `backend: "fallback"` and an identical chunk count and identical
    `content` values to check 1 — the article's own headings drive the
    split, so the LLM step changing nothing must be observable, not
@@ -793,11 +906,23 @@ and `agents/knowledge/data/LESSONS-ai-native-sdlc-playbook.md` is 236 lines / 13
   zero on both fixtures. Whoever builds `embed.py` must confirm it and, if Voyage
   errors, embed a `MAX_CHARS`-truncated copy while storing `content` whole.
 
-## Not started
+## Status
 
-Every file under "Repo layout" above — no code has been written yet. The
-domain's architecture (decisions 1-13) and the chunking unit's full build
-spec (decisions 14-19, "Chunking implementation plan" above) are both
-settled; `chunk.py` and `heading_agent.py` are the next files to build.
-</content>
-<parameter name="i">Write merged single-file domain plan
+`chunk.py` steps 1-2 (unit segmentation) and `heading_agent.py` (step 3,
+heading-insertion call) are built, reviewed, and committed. `judge.py` and
+`eval.py` are also built — not in the original plan, see the Repo layout
+note under Step 3. `db.py`, `triage.py`, `embed.py`, `search.py`,
+`summarizer_agent.py`, and `ingest.py` are still unbuilt.
+
+**Next: Step 4** — `validate_points()` in `chunk.py`. The domain's
+architecture (decisions 1-13) and the chunking unit's full build spec
+(decisions 14-19, "Chunking implementation plan" above) are both settled;
+the anchor-repair sub-spec in Step 4 above has been updated with concrete
+failure patterns confirmed against live `heading_agent` output (see
+`eval.py`'s `_normalize_anchor`) — read that before implementing, not just
+the original bullet list.
+
+**Blocking gap, not code**: no fixture in `data/` currently has real
+headings covering all its topics (see Repo layout above) — needed for
+Step 3 check 2 and Step 7 checks 1-2. Supply one before those checks can
+run.
