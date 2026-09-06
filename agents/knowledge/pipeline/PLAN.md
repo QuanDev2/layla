@@ -4,8 +4,8 @@ updated: 2026-09-06
 schema: drafted
 scripts: chunk.py complete (steps 1-7) and heading_agent.py built; judge.py
   and eval.py also built (dev-only grading harness, not in original plan —
-  see "Grading harness" note under Step 3); db.py, embed.py, triage.py
-  built; ingest.py, search.py, summarizer_agent.py unbuilt
+  see "Grading harness" note under Step 3); db.py, embed.py, triage.py,
+  ingest.py built; search.py, summarizer_agent.py unbuilt
 ---
 
 # Knowledge domain — design log
@@ -211,7 +211,7 @@ flowchart TD
 agents/knowledge/
   AGENTS.md         — domain instructions Layla reads for knowledge-touching requests
   db.py             — schema + connection helper
-  ingest.py         — capture: fetch content, create documents row
+  ingest.py         — capture: create documents row, no fetching (built)
   chunk.py          — unit segmentation, validation/repair, structural split,
                        context prefixes, public API + CLI (built, steps 1-7)
   heading_agent.py  — heading-insertion call; pluggable backend (omp | anthropic |
@@ -973,10 +973,10 @@ repair), 5 (structural split), 6 (context prefix), and 7 (public API, CLI,
 candidate table) are built and verified against real fixtures.
 `heading_agent.py` (step 3), `judge.py`, and `eval.py` were built earlier —
 see the Repo layout note under Step 3 for why the latter two exist.
-`db.py`, `embed.py`, and `triage.py` are also built (schema/connection
-helper, Voyage provider abstraction, snippet writer). `search.py`,
-`summarizer_agent.py`, `ingest.py`, and `agents/knowledge/AGENTS.md` are
-still unbuilt.
+`db.py`, `embed.py`, `triage.py`, and `ingest.py` are also built
+(schema/connection helper, Voyage provider abstraction, snippet writer,
+document capture). `search.py`, `summarizer_agent.py`, and
+`agents/knowledge/AGENTS.md` are still unbuilt.
 
 **Verification results (2026-09-06, all seven Step 7 / Step 4-6 checks):**
 
@@ -1037,12 +1037,23 @@ landing on the correct rows; end-to-end check with real `chunk.py` output
 (8 chunks from the LangGraph fixture) round-tripped through `write_chunks`
 with matching row count and FTS hits.
 
+**`ingest.py` built** — `capture()` creates a `documents` row from
+already-obtained text (it does not fetch anything itself — see the design
+note in "Repo layout" above), dedupes by `url` before inserting, and
+`set_summary()` records the discussion summary later. Verified: bad
+`source_type` and empty text both rejected without writing; a second
+`capture()` with a known `url` returns the existing `document_id` with
+`duplicate: True`, writes no second row, and leaves the original
+`raw_text` untouched even when called with different text; `set_summary`
+rejects a missing document and an empty summary; full chain verified
+end-to-end — `ingest.capture()` → `triage.write_excerpt()` → FTS hit.
+
 **Next: `search.py`** (hybrid FTS5 + vector + fusion, temporal boost, the
 read-time neighbor expansion from decision 15) — the only unbuilt piece
-between "snippets are stored" and "you can ask for them back." Also still
-needed: `ingest.py` (create the `documents` row triage.py's `document_id`
-points at — nothing creates one yet) and `agents/knowledge/AGENTS.md` (the
-domain workflow instructions Layla actually reads).
+between "snippets are stored" and "you can ask for them back." After that,
+`agents/knowledge/AGENTS.md` (the domain workflow instructions Layla
+actually reads) and `summarizer_agent.py` (bulk-import subagent) are the
+last two.
 
 **Still undecided:** how `judge.py` plugs in — synchronous quality gate on
 `_resolve_points`, or offline audit only. Nothing in `chunk.py` calls it
