@@ -1,6 +1,6 @@
 ---
 status: design
-updated: 2026-09-05
+updated: 2026-09-06
 schema: drafted
 scripts: chunk.py (steps 1-2) and heading_agent.py (step 3) built and committed;
   judge.py and eval.py also built (dev-only grading harness, not in original
@@ -226,16 +226,15 @@ agents/knowledge/
   summarizer_agent.py  — bulk-import only; bootstrapped subagent, mirrors
                           agents/youtube/agent.py
   data/             — gitignored: knowledge.db; also holds verification
-                       fixtures. Current set (2026-09-05): data/articles/
-                       (2 articles — one already has real headings covering
-                       most of it, one is structureless) and data/videos/
-                       (4 YouTube transcripts, auto-generated captions).
-                       The original LESSONS-ai-native-sdlc-playbook.md fixture
-                       (18 headings, used below as the canonical
-                       "already-fully-structured, expect []" case) was
-                       removed and not replaced — checks below that reference
-                       it need a new fixture with that property before they
-                       can run as written.
+                       fixtures. Current set (2026-09-06): data/articles/
+                       (3 articles — train-llm-from-scratch.md is densely
+                       headed end to end, the other two have partial or no
+                       structure) and data/videos/ (4 YouTube transcripts,
+                       auto-generated captions). The original
+                       LESSONS-ai-native-sdlc-playbook.md fixture was
+                       removed without replacement mid-session; see the
+                       "already-structured" note under Step 3 for what
+                       replaced it and what changed about the expectation.
   eval.md           — gitignored, NOT committed. Local log of eval.py runs
                        (model/effort tried, per-heading scores, findings).
                        Exists only in this checkout, not on a fresh clone —
@@ -450,6 +449,22 @@ TOOL_NAMES = ["read", "write"]
   headings (3 separate runs) to a real split spread across the previously
   unheaded body, not one heading for the whole blob.
 
+**`[]` is real but not deterministic, even on a maximally-covered document —
+calibrate expectations accordingly.** Confirmed by taking a densely-headed
+fixture (`data/articles/train-llm-from-scratch.md`, 30 real headings) and
+running `insert_headings` on it 3 times with nothing changed between runs:
+`[]` twice, one heading once (splitting a legitimately marginal sub-topic —
+a diagram color-legend paragraph — out of a longer section). This is
+expected variance, not a bug: "does this count as a genuine topic change"
+is a judgment call the model can land on either side of at the margin. Do
+not write a check that asserts `points == []` on any live LLM call without
+a retry or tolerance band — assert instead that `headings_inserted` stays
+small (0-1 on this fixture) and none of the points duplicate/overlap
+existing headings. `[]` still matters even though it's not guaranteed
+every run: it's what makes the retry loop and any future periodic re-audit
+of already-chunked content terminate, rather than always finding "just one
+more" heading to add.
+
 `insert_headings(units: list[dict], source_kind: str, model=DEFAULT_MODEL, effort=DEFAULT_EFFORT, feedback=None) -> dict`
 
 - Takes the units from step 2, not raw text — the caller owns segmentation.
@@ -573,13 +588,15 @@ for p in r.get('points', []):
 1. Against the transcript fixture: `backend == 'omp'`, points list
    non-empty, and for each printed point the unit text actually matches
    the anchor and heading topic — read a handful, not all.
-2. Against a fixture that already has clear headings covering its topics:
-   expect `points == []` — the model recognizing existing structure and
-   declining to add more is the pass condition, not an empty result to be
-   suspicious of. **No such fixture currently exists in `data/`** — the
-   original (`LESSONS-ai-native-sdlc-playbook.md`, 18 headings) was removed
-   and not replaced (see Repo layout above). Supply one before running this
-   check.
+2. Against `data/articles/train-llm-from-scratch.md` (densely headed, 30
+   real headings covering it end to end): expect `points` to stay small —
+   observed `[]` on 2 of 3 identical runs, one heading (a genuinely
+   marginal sub-topic split) on the third. Do not assert `points == []`
+   outright; assert `len(points) <= 1` and, if non-empty, that the point's
+   `before_unit` doesn't land right before an existing markdown heading
+   (that would mean duplicating structure that's already there, the actual
+   failure mode this check exists to catch). See the "`[]` is real but not
+   deterministic" note under Step 3's build summary above for why.
 3. `KNOWLEDGE_LLM=off` re-run of either: `r['ok'] is False`,
    `r['backend'] == 'off'`.
 
@@ -810,26 +827,30 @@ confirmed present: the transcript is 544 lines / 22,106 chars with 534
 `[MM:SS]` segments (auto-generated captions — the hardest boundary case).
 `omp` must be on PATH for checks 1 and 3.
 
-**Checks 1-2 need a fixture that doesn't currently exist in `data/`** — a
-document with real headings already covering all its topics, so the
-"already-structured, pass through unchanged" path has something to run
-against. The original (`LESSONS-ai-native-sdlc-playbook.md`, 236 lines,
-13,243 chars, 18 heading lines) was removed and not replaced (see Repo
-layout above). Supply one, adjust the specific numbers below to match it,
-then run:
+`data/articles/train-llm-from-scratch.md` (30 real headings, densely
+covers the whole document) is the fixture for checks 1-2, replacing the
+removed `LESSONS-ai-native-sdlc-playbook.md`. One difference: `points`
+isn't guaranteed to be exactly `[]` on this fixture even when nothing's
+wrong — 2 of 3 identical runs gave `[]`, one gave a single extra heading
+splitting a legitimately marginal sub-topic (see Step 3's "`[]` is real
+but not deterministic" note above). Calibrate check 1 accordingly:
 
-1. **Already-structured article passes through.**
-   `python3 -m agents.knowledge.chunk <fixture> --kind article --title "<title>" --table`
-   Expect `backend: "passthrough"` with `headings_inserted: 0` (its real
-   headings already cover its topics), every `chars` ≤ 7,000, and each
-   prefix reading `<title> > <one of its real headings>`.
+1. **Already-structured article passes through, with at most trivial
+   additions.**
+   `python3 -m agents.knowledge.chunk agents/knowledge/data/articles/train-llm-from-scratch.md --kind article --title "Train LLM From Scratch" --table`
+   Expect `backend: "passthrough"` (if `headings_inserted: 0`) or
+   `"llm"` with `headings_inserted` of 1 (its real headings already cover
+   essentially all of it — treat 2+ as a real regression, not noise),
+   every `chars` ≤ 7,000, and each prefix reading `Train LLM From Scratch >
+   <one of its real headings>`.
 
-2. **Deterministic path produces the same split.**
-   `KNOWLEDGE_LLM=off python3 -m agents.knowledge.chunk <fixture> --kind article --title "<title>"`
-   Expect `backend: "fallback"` and an identical chunk count and identical
-   `content` values to check 1 — the article's own headings drive the
-   split, so the LLM step changing nothing must be observable, not
-   assumed.
+2. **Deterministic path produces a superset split.**
+   `KNOWLEDGE_LLM=off python3 -m agents.knowledge.chunk agents/knowledge/data/articles/train-llm-from-scratch.md --kind article --title "Train LLM From Scratch"`
+   Expect `backend: "fallback"` and a chunk count equal to or one more
+   than check 1's (depending on whether check 1's run added the marginal
+   heading) — the article's own headings drive the split either way, so
+   the LLM step changing nothing beyond that one optional heading must be
+   observable, not assumed.
 
 3. **Structureless transcript gains headings and timestamps.**
    `python3 -m agents.knowledge.chunk agents/youtube/data/videos/ow1we5PzK-o/transcript.md --kind transcript --table`
@@ -922,7 +943,7 @@ failure patterns confirmed against live `heading_agent` output (see
 `eval.py`'s `_normalize_anchor`) — read that before implementing, not just
 the original bullet list.
 
-**Blocking gap, not code**: no fixture in `data/` currently has real
-headings covering all its topics (see Repo layout above) — needed for
-Step 3 check 2 and Step 7 checks 1-2. Supply one before those checks can
-run.
+**Fixture gap closed**: `data/articles/train-llm-from-scratch.md` (30 real
+headings, densely covers the whole document) now serves Step 3 check 2 and
+Step 7 checks 1-2 — see those checks and Step 3's "`[]` is real but not
+deterministic" note for the calibrated (not exact-`[]`) expectation.
