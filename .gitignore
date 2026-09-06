@@ -5,6 +5,9 @@ __pycache__/
 *.pyc
 .venv/
 
+# macOS Finder metadata
+.DS_Store
+
 # eval harness scratch — dev-only, not source
 agents/knowledge/eval.md
 agents/knowledge/eval_runs/
