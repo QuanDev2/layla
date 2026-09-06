@@ -2,10 +2,10 @@
 status: design
 updated: 2026-09-06
 schema: drafted
-scripts: chunk.py complete (steps 1-7, verified) and heading_agent.py built
-  and committed; judge.py and eval.py also built (dev-only grading harness,
-  not in original plan — see "Grading harness" note under Step 3); db.py,
-  ingest.py, triage.py, embed.py, search.py, summarizer_agent.py unbuilt
+scripts: chunk.py complete (steps 1-7) and heading_agent.py built; judge.py
+  and eval.py also built (dev-only grading harness, not in original plan —
+  see "Grading harness" note under Step 3); db.py and embed.py built;
+  ingest.py, triage.py, search.py, summarizer_agent.py unbuilt
 ---
 
 # Knowledge domain — design log
@@ -36,11 +36,20 @@ read it before re-litigating anything below.
    matrix-vector multiply, sub-millisecond. `sqlite-vec` or similar is a
    scale problem this system doesn't have — revisit only if the corpus
    reaches tens of thousands of snippets.
-5. **Embedding provider: Voyage AI for the PoC.** Free tier (200M tokens ×
-   several accounts) removes the billing objection for now. Every embedded
-   row records `embedding_model` — vectors from different models/providers
-   aren't comparable, so switching providers later is an explicit re-embed
-   job, never a silent correctness bug.
+5. **Embedding provider: Voyage AI for the PoC, model pinned to `voyage-4`.**
+   Free tier (200M tokens) removes the billing objection for now. Every
+   embedded row records `embedding_model` — vectors from different
+   models/providers aren't comparable, so switching providers later is an
+   explicit re-embed job, never a silent correctness bug.
+   **Correction (2026-09-06, `embed.py` build):** the original `voyage-3`
+   example in the schema comment is stale — Voyage's current pricing
+   dropped the free-tier allocation from the voyage-3.x line entirely;
+   only the voyage-4 series (plus voyage-context-3/4, voyage-code-3) still
+   gets the 200M free tokens this decision relies on. `voyage-4`'s
+   32,000-token context also makes `over_cap` chunks (decision 14) a
+   non-issue for this provider — the cap exists for the EmbeddingGemma
+   local swap target below, whose 2,048-token window is the real
+   constraint it guards against.
 6. **Local fallback (post-PoC swap target): EmbeddingGemma-300M, Q8_0.**
    Not fp32 — quality delta vs. full precision is 0.23 MTEB points on
    English v2 (68.36 → 68.13), noise-level, at roughly 4x the disk/RAM of
@@ -164,7 +173,7 @@ CREATE TABLE snippets (
   tags            TEXT,                              -- comma-separated, free-form
   created_at      TEXT NOT NULL,
   embedding       BLOB,                               -- raw float32 vector bytes
-  embedding_model TEXT NOT NULL                        -- e.g. 'voyage-3', 'embeddinggemma-q8'
+  embedding_model TEXT NOT NULL                        -- e.g. 'voyage-4', 'embeddinggemma-q8'
 );
 
 CREATE VIRTUAL TABLE snippets_fts USING fts5(
@@ -222,7 +231,7 @@ agents/knowledge/
                        agents/youtube/PLAN.md, this one exists to eyeball
                        prompt/model changes by hand, not to auto-pick a winner.
   triage.py         — write snippets from triage decisions
-  embed.py          — provider abstraction (Voyage now, swappable to local)
+  embed.py          — provider abstraction (Voyage now, swappable to local) (built)
   search.py         — hybrid search: FTS + vector + fusion
   summarizer_agent.py  — bulk-import only; bootstrapped subagent, mirrors
                           agents/youtube/agent.py
@@ -948,10 +957,14 @@ but not deterministic" note above). Calibrate check 1 accordingly:
   check 3 yields chunks that read as fragments mid-argument, raise `TARGET_CHARS` to
   2,600 (~650 tokens); do not add stored overlap, since read-time neighbor expansion
   (decision 15) is the mechanism for that problem.
-- **Voyage's behavior on over-limit input is unconfirmed** — it may error or silently
-  truncate. This only affects `over_cap` chunks, which check 1 and 3 should report as
-  zero on both fixtures. Whoever builds `embed.py` must confirm it and, if Voyage
-  errors, embed a `MAX_CHARS`-truncated copy while storing `content` whole.
+- **Resolved (2026-09-06, `embed.py` build): Voyage's over-limit behavior is
+  confirmed, not unconfirmed** — its `truncation` parameter defaults to
+  `True`: an over-length input is truncated by Voyage itself, never
+  errors. `embed.py` leaves this at its default rather than forcing it, so
+  no manual pre-truncation guard was needed. `content` in the database is
+  untouched either way — only the embedding call ever sees a truncated
+  copy, and `voyage-4`'s 32,000-token context means this never triggers in
+  practice at the current `MAX_CHARS` cap.
 
 ## Status
 
@@ -960,7 +973,8 @@ repair), 5 (structural split), 6 (context prefix), and 7 (public API, CLI,
 candidate table) are built and verified against real fixtures.
 `heading_agent.py` (step 3), `judge.py`, and `eval.py` were built earlier —
 see the Repo layout note under Step 3 for why the latter two exist.
-`db.py`, `triage.py`, `embed.py`, `search.py`, `summarizer_agent.py`,
+`db.py` and `embed.py` are also built (schema/connection helper, Voyage
+provider abstraction). `triage.py`, `search.py`, `summarizer_agent.py`,
 `ingest.py`, and `agents/knowledge/AGENTS.md` are still unbuilt.
 
 **Verification results (2026-09-06, all seven Step 7 / Step 4-6 checks):**
@@ -997,10 +1011,22 @@ step lists `"omp" | "anthropic" | "fallback" | "passthrough"`, and the
 implementation returns the actual backend id (`"omp"`). The check's intent is
 unchanged: a live model run that inserted something.
 
-**Next: the storage layer** — `db.py` (schema from above), then `embed.py`,
-`triage.py`, and `search.py` (read-time neighbor expansion per decision 15).
-`chunk.py` produces candidates and has no write path at all, so nothing
-downstream exists yet to store a confirmed chunk.
+**`db.py` built** (schema + connection helper; three FTS5 sync triggers not
+spelled out in the schema decisions were added — external-content FTS5
+tables don't self-maintain). **`embed.py` built** (Voyage provider via
+stdlib `urllib`, no new HTTP dependency; `numpy` added as the project's
+second pip dependency, pinned to 2.0.2 for this environment's Python 3.9 —
+2.1+ needs 3.10+). Verified: schema idempotent, FTS insert/update/delete
+sync, FK enforcement, blob round-trip, all non-network failure paths, and
+the HTTP request/retry/mismatch-detection logic against a mocked Voyage
+response. **Not verified: a real Voyage API call** — no `VOYAGE_API_KEY` in
+this environment yet.
+
+**Next: `triage.py`**, so a confirmed snippet actually gets written —
+`embed.py`'s contract is that a failed or not-yet-run embed
+(`embedding=NULL`, `embedding_model=NULL`) must never block the write;
+`triage.py` is where that has to hold. `search.py` (read-time neighbor
+expansion per decision 15) needs both `db.py` and `embed.py` first.
 
 **Still undecided:** how `judge.py` plugs in — synchronous quality gate on
 `_resolve_points`, or offline audit only. Nothing in `chunk.py` calls it
