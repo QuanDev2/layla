@@ -4,8 +4,8 @@ updated: 2026-09-06
 schema: drafted
 scripts: chunk.py complete (steps 1-7) and heading_agent.py built; judge.py
   and eval.py also built (dev-only grading harness, not in original plan —
-  see "Grading harness" note under Step 3); db.py and embed.py built;
-  ingest.py, triage.py, search.py, summarizer_agent.py unbuilt
+  see "Grading harness" note under Step 3); db.py, embed.py, triage.py
+  built; ingest.py, search.py, summarizer_agent.py unbuilt
 ---
 
 # Knowledge domain — design log
@@ -230,7 +230,7 @@ agents/knowledge/
                        unlike the candidate-comparison eval.py sketched for
                        agents/youtube/PLAN.md, this one exists to eyeball
                        prompt/model changes by hand, not to auto-pick a winner.
-  triage.py         — write snippets from triage decisions
+  triage.py         — write snippets from triage decisions (built)
   embed.py          — provider abstraction (Voyage now, swappable to local) (built)
   search.py         — hybrid search: FTS + vector + fusion
   summarizer_agent.py  — bulk-import only; bootstrapped subagent, mirrors
@@ -973,9 +973,10 @@ repair), 5 (structural split), 6 (context prefix), and 7 (public API, CLI,
 candidate table) are built and verified against real fixtures.
 `heading_agent.py` (step 3), `judge.py`, and `eval.py` were built earlier —
 see the Repo layout note under Step 3 for why the latter two exist.
-`db.py` and `embed.py` are also built (schema/connection helper, Voyage
-provider abstraction). `triage.py`, `search.py`, `summarizer_agent.py`,
-`ingest.py`, and `agents/knowledge/AGENTS.md` are still unbuilt.
+`db.py`, `embed.py`, and `triage.py` are also built (schema/connection
+helper, Voyage provider abstraction, snippet writer). `search.py`,
+`summarizer_agent.py`, `ingest.py`, and `agents/knowledge/AGENTS.md` are
+still unbuilt.
 
 **Verification results (2026-09-06, all seven Step 7 / Step 4-6 checks):**
 
@@ -1022,11 +1023,26 @@ the HTTP request/retry/mismatch-detection logic against a mocked Voyage
 response. **Not verified: a real Voyage API call** — no `VOYAGE_API_KEY` in
 this environment yet.
 
-**Next: `triage.py`**, so a confirmed snippet actually gets written —
-`embed.py`'s contract is that a failed or not-yet-run embed
-(`embedding=NULL`, `embedding_model=NULL`) must never block the write;
-`triage.py` is where that has to hold. `search.py` (read-time neighbor
-expansion per decision 15) needs both `db.py` and `embed.py` first.
+**`triage.py` built** — `write_excerpt`/`write_synthesis`/`write_rejection`
+for a single confirmed snippet, `write_chunks` for the "keep the whole
+document" path straight from `chunk.py`'s `chunks` list (one batched
+`embed.embed()` call per document, not one per chunk), `set_status`/
+`discard_document` for the document-level triage call. Verified: missing
+document and empty content both rejected without writing or embedding;
+document existence is checked before embedding, so a doomed write never
+spends an API call; a failed embed (mocked and via `KNOWLEDGE_EMBED=off`)
+still writes the row with `embedding=NULL`, immediately FTS-searchable;
+`write_chunks` makes exactly one embed call for N chunks with vectors
+landing on the correct rows; end-to-end check with real `chunk.py` output
+(8 chunks from the LangGraph fixture) round-tripped through `write_chunks`
+with matching row count and FTS hits.
+
+**Next: `search.py`** (hybrid FTS5 + vector + fusion, temporal boost, the
+read-time neighbor expansion from decision 15) — the only unbuilt piece
+between "snippets are stored" and "you can ask for them back." Also still
+needed: `ingest.py` (create the `documents` row triage.py's `document_id`
+points at — nothing creates one yet) and `agents/knowledge/AGENTS.md` (the
+domain workflow instructions Layla actually reads).
 
 **Still undecided:** how `judge.py` plugs in — synchronous quality gate on
 `_resolve_points`, or offline audit only. Nothing in `chunk.py` calls it
