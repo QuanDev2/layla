@@ -35,6 +35,10 @@ INPUT_SCHEMA = {
 DEFAULT_MODEL = "anthropic/claude-haiku-5"
 DEFAULT_EFFORT = "medium"
 TOOL_NAMES = ["read", "write"]
+# A 534-unit auto-caption transcript (22k chars) exceeded the original 180s
+# on a live run; the whole document is one call, so the ceiling scales with
+# document length, not with per-heading work.
+TIMEOUT_SECONDS = 600
 
 # The anthropic SDK takes its own model id, unrelated to omp's provider-prefixed
 # routing string above — see PLAN.md "Assumptions & contingencies".
@@ -139,11 +143,11 @@ def _insert_headings_omp(prompt: str, rendered: str, model: str, effort: str) ->
             "the file even if the array is empty. Do not skip this step.",
         ]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
         except FileNotFoundError:
             return {"ok": False, "error": "omp not found on PATH", "backend": "omp"}
         except subprocess.TimeoutExpired:
-            return {"ok": False, "error": "omp headless call timed out after 180s", "backend": "omp"}
+            return {"ok": False, "error": f"omp headless call timed out after {TIMEOUT_SECONDS}s", "backend": "omp"}
 
         if not Path(out_path).exists():
             return {

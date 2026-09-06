@@ -70,8 +70,14 @@ claim only holds under offset-slicing. This is the one real forward risk.
 - Sentence split is naive re abbreviations (`U.S.`, `e.g.`), but matches
   spec's explicit `[.?!]` + whitespace rule.
 
-## Action before step 4
+## Action before step 4 — resolved
 
 Pin down that `structured_text` is built by offset-slicing, not by
 concatenating `unit["text"]` — otherwise finding 2 becomes a real text-loss
 bug.
+
+Closed in the step 4-7 build: `apply_points()` slices the source between
+consecutive unit offsets, so the 4 dropped `\n\n` gaps are recovered.
+Verified byte-for-byte — `structured_text == source` on both article
+fixtures under `KNOWLEDGE_LLM=off`, and whitespace-normalized identity
+`MATCH` on the transcript with 32 live headings inserted.

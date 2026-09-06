@@ -2,9 +2,10 @@
 status: design
 updated: 2026-09-06
 schema: drafted
-scripts: chunk.py (steps 1-2) and heading_agent.py (step 3) built and committed;
-  judge.py and eval.py also built (dev-only grading harness, not in original
-  plan — see "Grading harness" note under Step 3); step 4 (validate_points) next
+scripts: chunk.py complete (steps 1-7, verified) and heading_agent.py built
+  and committed; judge.py and eval.py also built (dev-only grading harness,
+  not in original plan — see "Grading harness" note under Step 3); db.py,
+  ingest.py, triage.py, embed.py, search.py, summarizer_agent.py unbuilt
 ---
 
 # Knowledge domain — design log
@@ -202,8 +203,8 @@ agents/knowledge/
   AGENTS.md         — domain instructions Layla reads for knowledge-touching requests
   db.py             — schema + connection helper
   ingest.py         — capture: fetch content, create documents row
-  chunk.py          — unit segmentation (built, steps 1-2), structural splitter +
-                       context prefixes (steps 4-6, not yet built)
+  chunk.py          — unit segmentation, validation/repair, structural split,
+                       context prefixes, public API + CLI (built, steps 1-7)
   heading_agent.py  — heading-insertion call; pluggable backend (omp | anthropic |
                        off) (built, step 3)
   judge.py          — NOT in original plan. Grades heading_agent's points for
@@ -688,6 +689,31 @@ Read that `msg` names the specific unit/section, e.g. contains `"section
 starting at block"` or the dropped anchor's text — a generic string here is
 a bug per decision 16 / `agents/youtube/PLAN.md:109-110`.
 
+**Built, with two deliberate divergences from the spec above** — both found
+by running the live pipeline, both recorded here rather than silently coded:
+
+- **The section-cap check measures boundaries, not just points.** Rule 7 as
+  written ("sum unit lengths between consecutive points") reports one
+  30,000-char section on a densely-headed article whenever the model
+  correctly returns `[]`, because the document's own 30 headings aren't
+  counted as boundaries. That fires a pointless retry on exactly the
+  documents that need no work. The implementation unions the inserted points
+  with the document's own heading units before measuring, so a section the
+  document already delimits is never reported as the model's failure.
+- **A second validation failure keeps the validated points instead of
+  discarding them.** The retry policy above discards the whole LLM result
+  and reports `backend: "fallback"`. That is strictly worse output: points
+  that survive `validate_points` are already sound — offenders were dropped,
+  not kept — so the only complaint that can outlive a retry is an
+  under-dense section, and on a heading-less transcript falling back means
+  zero boundaries instead of ~30 good ones. The cap is never breached in
+  the output either way, because `split_body` caps every chunk at
+  `TARGET_CHARS` regardless. Implementation: retry once on any message, keep
+  whichever attempt validated more points, and report `"fallback"` only when
+  no LLM result was usable at all. `"passthrough"` is now reserved for an
+  empty *and* clean result — empty-with-a-complaint is a fallback, not a
+  well-structured document.
+
 #### Step 5 — Structural split
 
 `split_sections(units, points) -> list[dict]` cuts at every heading — both the
@@ -929,19 +955,56 @@ but not deterministic" note above). Calibrate check 1 accordingly:
 
 ## Status
 
-`chunk.py` steps 1-2 (unit segmentation) and `heading_agent.py` (step 3,
-heading-insertion call) are built, reviewed, and committed. `judge.py` and
-`eval.py` are also built — not in the original plan, see the Repo layout
-note under Step 3. `db.py`, `triage.py`, `embed.py`, `search.py`,
-`summarizer_agent.py`, and `ingest.py` are still unbuilt.
+`chunk.py` is complete: steps 1-2 (unit segmentation), 4 (validation and
+repair), 5 (structural split), 6 (context prefix), and 7 (public API, CLI,
+candidate table) are built and verified against real fixtures.
+`heading_agent.py` (step 3), `judge.py`, and `eval.py` were built earlier —
+see the Repo layout note under Step 3 for why the latter two exist.
+`db.py`, `triage.py`, `embed.py`, `search.py`, `summarizer_agent.py`,
+`ingest.py`, and `agents/knowledge/AGENTS.md` are still unbuilt.
 
-**Next: Step 4** — `validate_points()` in `chunk.py`. The domain's
-architecture (decisions 1-13) and the chunking unit's full build spec
-(decisions 14-19, "Chunking implementation plan" above) are both settled;
-the anchor-repair sub-spec in Step 4 above has been updated with concrete
-failure patterns confirmed against live `heading_agent` output (see
-`eval.py`'s `_normalize_anchor`) — read that before implementing, not just
-the original bullet list.
+**Verification results (2026-09-06, all seven Step 7 / Step 4-6 checks):**
+
+| Check | Result |
+|---|---|
+| Step 4 repair | Out-of-range point dropped and named in the message; drifted anchor moved 5 → 8; duplicate collapsed |
+| Step 4 failure paths | Unmatched anchor and oversized section both produce scoped messages naming the offender, never a generic string |
+| Step 5 fences | 37 real fences in `train-llm-from-scratch.md`, each wholly inside exactly one chunk |
+| Step 6 prefixes | All four template cases exact, including the degraded ones (`Intro`, `Video [0:00–2:00]`) |
+| Step 7 check 1 | `backend: "omp"`, `headings_inserted: 1`, 32 chunks — the one addition is the diagram color-legend paragraph the note above predicted |
+| Step 7 check 2 | `backend: "fallback"`, 31 chunks — exactly one fewer than check 1, as calibrated |
+| Step 7 checks 3-5 | Transcript: `backend: "omp"`, 32 headings, 33 chunks, no chunk over the cap (max 1,572 chars), `start` strictly increasing, every `[MM:SS]` at a line start; `KNOWLEDGE_LLM=off` gives 13 valid fallback chunks |
+| Step 7 check 4 | Text identity `MATCH` on both fixtures, both backends, for `structured_text` *and* the concatenated chunk bodies |
+
+**Two bugs found and fixed by these runs, not by review:**
+
+- `heading_agent.TIMEOUT_SECONDS` — the hardcoded 180s subprocess timeout
+  killed the call on the 534-unit / 22,106-char transcript, which then
+  cascaded into a `fallback` with zero headings. The whole document is one
+  call, so the ceiling scales with document length; now 600s, and the
+  observed run takes 100-270s.
+- Inserted headings nested under each other. `split_sections` built its path
+  as `path[:1] + [heading]`, so the first insertion became `path[0]` and
+  every later one hung beneath it (`Goal: ... > Human attention ...`).
+  Inserted headings are always level 2, so the path is now composed from the
+  document's *own* heading path (`own_path[:1] + [heading]`), tracked
+  separately. Verified: transcript insertions are siblings, and an insertion
+  interrupting a `###` section still reports depth 2 under the `#` title.
+
+**Naming note for whoever reads Step 7 check 1:** it says to expect
+`backend: "llm"`. That value does not exist — the result schema in the same
+step lists `"omp" | "anthropic" | "fallback" | "passthrough"`, and the
+implementation returns the actual backend id (`"omp"`). The check's intent is
+unchanged: a live model run that inserted something.
+
+**Next: the storage layer** — `db.py` (schema from above), then `embed.py`,
+`triage.py`, and `search.py` (read-time neighbor expansion per decision 15).
+`chunk.py` produces candidates and has no write path at all, so nothing
+downstream exists yet to store a confirmed chunk.
+
+**Still undecided:** how `judge.py` plugs in — synchronous quality gate on
+`_resolve_points`, or offline audit only. Nothing in `chunk.py` calls it
+today.
 
 **Fixture gap closed**: `data/articles/train-llm-from-scratch.md` (30 real
 headings, densely covers the whole document) now serves Step 3 check 2 and
