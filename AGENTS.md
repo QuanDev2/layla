@@ -44,6 +44,13 @@ The user's global preferences in `~/.omp/agent/AGENTS.md` apply: lead with the
 answer, maximum concision, tables over paragraphs, full lists without
 pre-filtering, flag blockers explicitly.
 
+**Describing a file/component.** When asked to describe what a file or
+component does, always cover, in plain terms:
+- What it does.
+- Who calls it — when and how.
+- Who it answers to (does it call back / report to anything, or is it a leaf).
+- Where it sits in the workflow (what comes before it, what comes after).
+
 ## Environment
 
 - Python 3.9. Packages: `pip3 install -r requirements.txt`.
