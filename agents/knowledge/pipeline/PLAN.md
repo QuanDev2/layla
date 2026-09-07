@@ -5,7 +5,7 @@ schema: drafted
 scripts: chunk.py complete (steps 1-7) and heading_agent.py built; judge.py
   and eval.py also built (dev-only grading harness, not in original plan —
   see "Grading harness" note under Step 3); db.py, embed.py, triage.py,
-  ingest.py built; search.py, summarizer_agent.py unbuilt
+  ingest.py, search.py built; summarizer_agent.py unbuilt
 ---
 
 # Knowledge domain — design log
@@ -28,9 +28,17 @@ read it before re-litigating anything below.
    file, agent-mediated, no sync-drift risk. Export to markdown on request
    is a query, not a storage decision, if ever needed.
 3. **Retrieval: hybrid.** FTS5 keyword search (built into `sqlite3`, zero
-   new dependency) + vector similarity, fused. Add a temporal boost for
-   date-language queries ("last week," "recently") — borrowed from Mem0's
-   design, directly relevant given the stated use case.
+   new dependency, ranked by its built-in BM25) + vector cosine similarity,
+   fused by Reciprocal Rank Fusion (RRF — combines by rank position, not
+   raw score, since BM25 and cosine are on incomparable scales).
+   **Revised (2026-09-06, `search.py` design):** the temporal boost
+   originally specced here — detecting date language like "last week" and
+   boosting recent snippets — is cut. It assumed that phrasing would be
+   common in real queries; the actual usage pattern doesn't mention time
+   at all, so the boost would be dead code guarding a case that doesn't
+   occur. If recency ties ever become a real problem, the fix is sorting
+   ties by `created_at`, not phrase detection — smaller, and only worth
+   adding if it's actually noticed in practice.
 4. **Vector backend: brute-force cosine in numpy, not an ANN index.** At
    personal scale (low thousands of snippets) a full scan is a single
    matrix-vector multiply, sub-millisecond. `sqlite-vec` or similar is a
@@ -232,7 +240,7 @@ agents/knowledge/
                        prompt/model changes by hand, not to auto-pick a winner.
   triage.py         — write snippets from triage decisions (built)
   embed.py          — provider abstraction (Voyage now, swappable to local) (built)
-  search.py         — hybrid search: FTS + vector + fusion
+  search.py         — hybrid search: BM25 + cosine, fused by RRF (built)
   summarizer_agent.py  — bulk-import only; bootstrapped subagent, mirrors
                           agents/youtube/agent.py
   data/             — gitignored: knowledge.db; also holds verification
@@ -973,9 +981,9 @@ repair), 5 (structural split), 6 (context prefix), and 7 (public API, CLI,
 candidate table) are built and verified against real fixtures.
 `heading_agent.py` (step 3), `judge.py`, and `eval.py` were built earlier —
 see the Repo layout note under Step 3 for why the latter two exist.
-`db.py`, `embed.py`, `triage.py`, and `ingest.py` are also built
-(schema/connection helper, Voyage provider abstraction, snippet writer,
-document capture). `search.py`, `summarizer_agent.py`, and
+`db.py`, `embed.py`, `triage.py`, `ingest.py`, and `search.py` are also
+built (schema/connection helper, Voyage provider abstraction, snippet
+writer, document capture, hybrid retrieval). `summarizer_agent.py` and
 `agents/knowledge/AGENTS.md` are still unbuilt.
 
 **Verification results (2026-09-06, all seven Step 7 / Step 4-6 checks):**
@@ -1048,12 +1056,43 @@ note in "Repo layout" above), dedupes by `url` before inserting, and
 rejects a missing document and an empty summary; full chain verified
 end-to-end — `ingest.capture()` → `triage.write_excerpt()` → FTS hit.
 
-**Next: `search.py`** (hybrid FTS5 + vector + fusion, temporal boost, the
-read-time neighbor expansion from decision 15) — the only unbuilt piece
-between "snippets are stored" and "you can ask for them back." After that,
-`agents/knowledge/AGENTS.md` (the domain workflow instructions Layla
-actually reads) and `summarizer_agent.py` (bulk-import subagent) are the
-last two.
+**`search.py` built** — `search(conn, query, limit=10)` runs FTS5 (BM25)
+and brute-force cosine separately, fuses the two rank orders with
+Reciprocal Rank Fusion, expands each hit with its stored neighbors
+(decision 15), attaches source title/url/date. `backend` reports
+`"hybrid"` / `"fts_only"` / `"vector_only"` / `"none"` — honestly, per
+which side(s) actually contributed, not just whether vector search ran.
+
+**Revised (2026-09-06):** decision 3's temporal boost is cut — see the
+revision note under decision 3 itself. Real query phrasing doesn't
+include date language, so phrase-detection would guard a case that
+doesn't occur.
+
+**One bug found and fixed by testing, not review:** the first cut labeled
+`backend` `"hybrid"` whenever vector search found anything, regardless of
+whether FTS contributed — a malformed FTS query (stray quote) silently
+failed, vector search alone carried the result, and it was still reported
+as `"hybrid"`. Fixed: the label now checks both sides' actual candidate
+lists, not just vector's.
+
+**Verified against real data and the real Voyage API** (not mocked):
+ingested and chunked a real article, embedded all 8 chunks, searched
+against it plus an unrelated second document — results correctly excluded
+the unrelated document; RRF fusion matches the hand-worked example from
+design discussion exactly; a natural-language query sharing no exact
+words with the source text still found it via `vector_only` (proof
+hybrid search does something FTS alone can't); a malformed FTS query
+degrades to `vector_only` instead of crashing; `KNOWLEDGE_EMBED=off`
+degrades to `fts_only`; a query matching nothing anywhere returns `"none"`
+with zero results, not an error; neighbor expansion attaches real
+adjacent-chunk content; a discarded neighbor's gap never falls back to
+`raw_text`; a snippet with a stale `embedding_model` is correctly
+invisible to vector search while staying keyword-searchable.
+
+**Next: `agents/knowledge/AGENTS.md`** (the domain workflow instructions
+Layla actually reads — nothing in this domain is usable from a live
+conversation until this exists) and `summarizer_agent.py` (bulk-import
+subagent, decision 7) are the last two files in the domain.
 
 **Still undecided:** how `judge.py` plugs in — synchronous quality gate on
 `_resolve_points`, or offline audit only. Nothing in `chunk.py` calls it
