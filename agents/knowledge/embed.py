@@ -22,6 +22,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import numpy as np
 
@@ -32,6 +33,32 @@ INPUT_SCHEMA = {
     "model": {"type": "string", "required": False},
     "input_type": {"type": "string", "required": False},
 }
+
+
+def _load_dotenv() -> None:
+    """Load KEY=VALUE lines from the repo-root .env into os.environ.
+
+    In: none — reads {repo root}/.env if present.
+    Out: none. A real exported environment variable always wins — this
+         only fills in a name that isn't already set. Silent no-op if the
+         file is missing; a malformed line is skipped, never raised.
+         Generic, not Voyage-specific — any KEY=VALUE line is loaded, so
+         the same file also covers ANTHROPIC_API_KEY for heading_agent.py's
+         optional backend if this module has already been imported.
+    State: mutates os.environ.
+    """
+    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
 
 # voyage-3.x lost its free-tier allocation under Voyage's Sept-2026 pricing —
 # only the voyage-4 series (plus voyage-context-*/code-3) still carries the
