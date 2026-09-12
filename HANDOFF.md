@@ -5,8 +5,10 @@
   extraction is specified but unbuilt. Not yet run against your real playlist.
 - **Knowledge**: core pipeline built end-to-end — capture, chunk, embed,
   triage, search — and verified against real fixtures and the real Voyage
-  API. **Not yet usable from a live conversation**: `agents/knowledge/AGENTS.md`
-  doesn't exist, so Layla has no instructions for when to call any of it.
+  API. `agents/knowledge/AGENTS.md` is written and committed — **usable from
+  a live conversation now**. Not yet exercised in a real session (only smoke
+  tests so far). `summarizer_agent.py` (bulk import) is the one unbuilt
+  piece left in the domain.
   Full decision log (19+ numbered decisions) lives in
   `agents/knowledge/pipeline/PLAN.md` — read that before touching the domain,
   not this file.
@@ -93,9 +95,9 @@ Full design/decision log: `agents/knowledge/pipeline/PLAN.md`. Summary only belo
 | `judge.py` / `eval.py` | Dev-only grading harness for `heading_agent.py` — not production, not in the original plan |
 
 ### Not built
-- `agents/knowledge/AGENTS.md` — **blocking**: without domain instructions,
-  Layla has no trigger for when to call any of the above from conversation.
-- `summarizer_agent.py` — bulk-import bootstrapped subagent (many articles at once).
+- `summarizer_agent.py` — bulk-import bootstrapped subagent (many articles
+  at once). Single-article flow (`ingest.py`/`triage.py` called directly in
+  conversation) is complete and does not need this to work.
 
 ### Key decisions worth knowing before touching this domain
 - **SQLite, not a vector database.** Brute-force cosine in numpy beats an ANN
@@ -124,11 +126,14 @@ end-to-end, including correct discrimination between unrelated documents in
 a real hybrid search.
 
 ### Next steps
-1. `agents/knowledge/AGENTS.md` — domain workflow instructions. Nothing above
-   is usable from conversation until this exists.
-2. `summarizer_agent.py` — bulk-import subagent, once single-article flow is proven.
+1. Actually use it: capture a real article/link and triage it end-to-end in
+   a live conversation — everything so far is fixture/smoke-test verified,
+   not exercised for real.
+2. `summarizer_agent.py` — bulk-import subagent, once single-article flow is
+   proven in real use.
 3. Decide `judge.py`'s role: synchronous quality gate on chunking, or offline
    audit only. Nothing calls it today.
 
 ### Open questions
-- None blocking — the only real gate left is writing `AGENTS.md`.
+- None blocking. `summarizer_agent.py`'s exact trigger (how many articles at
+  once counts as "bulk") is worth settling before building it, not before now.
