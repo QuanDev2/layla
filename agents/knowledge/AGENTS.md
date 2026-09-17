@@ -70,10 +70,20 @@ print(ingest.capture(c, open('/tmp/knowledge-in.md').read(), 'url',
    `duplicate: True`, stop — the document is already known; read its
    summary and status, ask the user how to proceed. Never re-triage
    silently.
-3. Discuss in your own context. Never delegate this — the keep/discard
-   call needs the live conversation (decision 1).
-4. Triage per below. Every write confirmed first.
-5. Close: `ingest.set_summary()` with a few sentences, then
+3. Give the gist. Read the full text into your own context, then report
+   only the high-level summary — enough for the user to decide whether
+   the document is worth going further with. Never open with a
+   section-by-section breakdown; that is one possible answer in step 4,
+   not part of this step. Close with a two-column read-it/skip-it
+   verdict.
+4. Triage by conversation. The user asks questions, you answer from the
+   text in your context. Never delegate this — the keep/discard call
+   needs the live conversation (decision 1). Offer a `synthesis` write
+   when an answer here is worth keeping on its own.
+5. The user decides: discard, or keep and name which parts. Never
+   pre-empt this — proposing candidate keeps is fine, selecting is not.
+6. Write the confirmed snippets per "Workflow: triage writes" below,
+   then close: `ingest.set_summary()` with a few sentences, then
    `triage.set_status('kept' | 'partial')` — or `discard_document()`
    when nothing was worth keeping.
 
