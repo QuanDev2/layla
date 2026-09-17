@@ -40,9 +40,20 @@ Confirm with the user before any mutating action — archiving, deleting, sendin
 
 ## Style
 
-The user's global preferences in `~/.omp/agent/AGENTS.md` apply: lead with the
-answer, maximum concision, tables over paragraphs, full lists without
-pre-filtering, flag blockers explicitly.
+The user's global preferences in `~/.omp/agent/AGENTS.md` apply. Its
+"How you talk" and "What you say" sections are the full spec — read them
+there, they are not duplicated here. The rules that bite most often in
+this project:
+
+- One claim per bullet, claim bolded, mechanism in a sub-bullet.
+- Keep the causal chain in the sentence — `X → Y`, not `X` alone.
+- Number section headings sequentially so they can be cited back.
+- `---` rules between major blocks; verdicts in a closing two-column table.
+- Emoji only as component icons, never decoration.
+- **Layered summaries.** Any summary long enough that reading it is a
+  decision leads with the gist only — a few sentences, high level. The
+  section-by-section breakdown waits until asked for. This applies to every
+  domain: articles, transcripts, video triage, email digests.
 
 **Describing a file/component.** When asked to describe what a file or
 component does, always cover, in plain terms:
