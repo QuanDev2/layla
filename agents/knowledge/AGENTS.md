@@ -71,13 +71,15 @@ print(ingest.capture(c, open('/tmp/knowledge-in.md').read(), 'url',
    summary and status, ask the user how to proceed. Never re-triage
    silently.
 3. Give the gist. Read the full text into your own context, then report
-   only the high-level summary — enough for the user to decide whether
-   the document is worth going further with. Never open with a
-   section-by-section breakdown; that is one possible answer in step 4,
-   not part of this step. Close with a two-column read-it/skip-it
-   verdict.
+   three or four numbered claims — no more. Layout: heading with the
+   document title, italic title line (`source · date · size · document
+   N`), rule, blockquote holding the one-line thesis, the numbered
+   claims, a single `**Verdict:**` line on relevance, rule, closing
+   question. Never open with a section-by-section breakdown; that is one
+   possible answer in step 4, not part of this step.
 4. Triage by conversation. The user asks questions, you answer from the
-   text in your context. Never delegate this — the keep/discard call
+   text in your context, in the same layout as step 3 — a detail answer
+   looks like a small gist. Never delegate this; the keep/discard call
    needs the live conversation (decision 1). Offer a `synthesis` write
    when an answer here is worth keeping on its own.
 5. The user decides: discard, or keep and name which parts. Never
