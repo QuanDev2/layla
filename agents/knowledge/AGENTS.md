@@ -71,20 +71,25 @@ print(ingest.capture(c, open('/tmp/knowledge-in.md').read(), 'url',
    summary and status, ask the user how to proceed. Never re-triage
    silently.
 3. Give the gist. Read the full text into your own context, then report
-   three or four numbered claims — no more. Layout: heading with the
-   document title, italic title line (`source · date · size · document
-   N`), rule, blockquote holding the one-line thesis, the numbered
-   claims, a single `**Verdict:**` line on relevance, rule, closing
-   question. Never open with a section-by-section breakdown; that is one
-   possible answer in step 4, not part of this step.
-4. Triage by conversation. The user asks questions, you answer from the
-   text in your context, in the same layout as step 3 — a detail answer
-   looks like a small gist. Never delegate this; the keep/discard call
-   needs the live conversation (decision 1). Offer a `synthesis` write
-   when an answer here is worth keeping on its own.
-5. The user decides: discard, or keep and name which parts. Never
+   three or four numbered claims — no more. Its purpose is one decision:
+   is this worth going deeper on. Layout: heading with the document
+   title, italic title line (`source · date · size · document N`), rule,
+   blockquote holding the one-line thesis, the numbered claims, a single
+   `**Verdict:**` line on relevance, rule, closing question. Never open
+   with the key points; that is step 4.
+4. On "tell me more", give the key points. Same layout as step 3, heading
+   suffixed `— key points`, five claims max. Each numbered line holds
+   only its bold lead; the supporting facts are dash sub-bullets beneath
+   it, one or two per claim. The verdict line names which claims bear on
+   the user's own work.
+5. Triage by conversation. The user asks questions, you answer from the
+   text in your context, in the same layout — a detail answer looks like
+   a small gist. Never delegate this; the keep/discard call needs the
+   live conversation (decision 1). Offer a `synthesis` write when an
+   answer here is worth keeping on its own.
+6. The user decides: discard, or keep and name which parts. Never
    pre-empt this — proposing candidate keeps is fine, selecting is not.
-6. Write the confirmed snippets per "Workflow: triage writes" below,
+7. Write the confirmed snippets per "Workflow: triage writes" below,
    then close: `ingest.set_summary()` with a few sentences, then
    `triage.set_status('kept' | 'partial')` — or `discard_document()`
    when nothing was worth keeping.
