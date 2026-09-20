@@ -3,12 +3,11 @@
 ## Status
 - **YouTube**: ingest pipeline built and verified against real videos. Frame
   extraction is specified but unbuilt. Not yet run against your real playlist.
-- **Knowledge**: core pipeline built end-to-end — capture, chunk, embed,
-  triage, search — and verified against real fixtures and the real Voyage
-  API. `agents/knowledge/AGENTS.md` is written and committed — **usable from
-  a live conversation now**. Not yet exercised in a real session (only smoke
-  tests so far). `summarizer_agent.py` (bulk import) is the one unbuilt
-  piece left in the domain.
+- **Knowledge**: core pipeline built and **used for real** — document 1
+  (Anthropic's "Scaling Managed Agents") was captured, triaged in
+  conversation, and closed as `kept`: 12 snippets, all embedded, searchable.
+  Hybrid search was found broken during that run and fixed the same day.
+  `summarizer_agent.py` (bulk import) is the one unbuilt piece left.
   Full decision log (19+ numbered decisions) lives in
   `agents/knowledge/pipeline/PLAN.md` — read that before touching the domain,
   not this file.
@@ -32,6 +31,21 @@
 - **Credentials: tools hold capabilities, Layla holds none.** Secrets go from
   keychain/env/`.env` into the tool process, never into conversation. Narrow
   provider scopes; confirm before mutating.
+
+## Conventions the user cares about
+- **Never act without explicit approval.** Propose, then stop. Questions are
+  not approval. Stated in `~/.omp/agent/AGENTS.md`, which is the authority.
+- **Response format is specified, not a matter of taste.** Same file's "How
+  you talk" / "What you say" sections: `##` headings only (the renderer
+  prints `###` literally), flat numbering so claims can be cited back, a
+  numbered line holds a bold lead and nothing else with detail in
+  sub-bullets, three-to-five claims max, one `**Verdict:**` line, no emoji.
+- **That file is versioned** at `~/.config/agent/AGENTS.md` (symlinked from
+  `~/.omp/agent/`) in the private `QuanDev2/dotconfig` repo. Note that SSH
+  port 22 is blocked on this machine — pushes need
+  `GIT_SSH_COMMAND='ssh -p 443 -o Hostname=ssh.github.com'`.
+- **Docstrings:** imperative one-liner, then `In:` / `Out:` / `State:`
+  fragments. No history, no rationale prose.
 
 ## YouTube domain
 
@@ -91,7 +105,7 @@ Full design/decision log: `agents/knowledge/pipeline/PLAN.md`. Summary only belo
 | `embed.py` | Voyage AI provider (`voyage-4`), float32 blob codec, `.env` loader |
 | `ingest.py` | Captures already-fetched text into a `documents` row, dedupes by URL |
 | `triage.py` | Writes confirmed excerpts/synthesis/rejections into `snippets`, batch-embeds |
-| `search.py` | Hybrid search: FTS5 (BM25) + cosine, fused by Reciprocal Rank Fusion, neighbor expansion |
+| `search.py` | Hybrid search: FTS5 (BM25) + cosine, fused by Reciprocal Rank Fusion, neighbor expansion. Takes caller-extracted `terms` for the keyword side |
 | `judge.py` / `eval.py` | Dev-only grading harness for `heading_agent.py` — not production, not in the original plan |
 
 ### Not built
@@ -117,22 +131,33 @@ Full design/decision log: `agents/knowledge/pipeline/PLAN.md`. Summary only belo
 - **Nothing is ever silently discarded-then-reachable.** Read-time neighbor
   expansion (search.py) never re-reads `raw_text`, so a chunk you discarded in
   triage can never leak back into a search result through its neighbors.
+- **Keyword terms come from the caller, not a stopword list.** FTS5 ANDs bare
+  terms, so a sentence-shaped query demanded its function words too and
+  returned nothing — every real query silently ran `vector_only`. Layla holds
+  the question, so she passes content words as `search(..., terms=[...])`;
+  `_fts_ranked_ids` tries AND, falls back to OR. Rejected alternatives: a
+  hardcoded stopword frozenset (measured — BM25's IDF does not neutralize
+  stopwords at 12-snippet scale, so the list would be load-bearing and need
+  maintaining) and a per-query LLM call (500ms-2s on the interactive read
+  path, and it makes search fail when the network does).
 
 ### Verified
-Every file above was verified against real fixtures, and the last three
-(`embed.py`, `triage.py`, `search.py`) against the real Voyage API, not just
-mocks — full ingest → chunk → embed → triage → search chain confirmed
-end-to-end, including correct discrimination between unrelated documents in
-a real hybrid search.
+Every file was verified against real fixtures and the real Voyage API. On
+2026-09-20 the domain was exercised for real end-to-end: document 1 captured,
+discussed, 10 chunks + 2 syntheses written on confirmation, closed `kept`,
+then searched back. All 12 snippets embedded, zero embed errors. Post-fix,
+sentence queries report `backend: hybrid`; a query whose terms are absent
+from the corpus still reports `vector_only`, which is correct, not a
+regression.
 
 ### Next steps
-1. Actually use it: capture a real article/link and triage it end-to-end in
-   a live conversation — everything so far is fixture/smoke-test verified,
-   not exercised for real.
-2. `summarizer_agent.py` — bulk-import subagent, once single-article flow is
-   proven in real use.
-3. Decide `judge.py`'s role: synchronous quality gate on chunking, or offline
-   audit only. Nothing calls it today.
+1. `summarizer_agent.py` — bulk-import subagent. Settle what counts as
+   "bulk" first; the single-article flow is proven and doesn't need it.
+2. Decide `judge.py`'s role: synchronous quality gate on chunking, or
+   offline audit only. Nothing calls it today.
+3. Fix the doubled title in chunk context prefixes — every chunk's prefix
+   reads `<title> > <title> > <heading>`. Harmless for search, wastes
+   prefix chars in every embedded chunk.
 
 ### Open questions
 - None blocking. `summarizer_agent.py`'s exact trigger (how many articles at
