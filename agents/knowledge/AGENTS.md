@@ -115,8 +115,14 @@ for confirmation, then write. Never auto-select text.
 
 ## Workflow: search
 
-"Remind me what we learned about X" → `search.search(conn, query)`.
+"Remind me what we learned about X" →
+`search.search(conn, query, terms=[...])`.
 
+- You hold the question, so you strip it: pass the content words as
+  `terms` and leave `query` as the user asked it. The keyword index
+  matches literal words and would otherwise demand the function words
+  too; the vector side wants the full phrasing. Omitting `terms` falls
+  back to the whole query and loses keyword precision.
 - Results carry snippet content, kind, source title/url/date, and
   adjacent-chunk context. Synthesize the answer yourself and cite the
   source — don't dump raw rows.

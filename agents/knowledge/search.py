@@ -5,11 +5,12 @@ fuse the two rank orders (Reciprocal Rank Fusion), expand each hit with its
 stored neighbors, attach source metadata. This is the only way anything
 written by triage.py comes back out.
 
-In: an open db.py connection, a query string.
-Out: {"ok": True, "backend": "hybrid" | "fts_only", "results": [...]} or
-     {"ok": False, "error": str}; never raises. A failed or unavailable
-     embed step degrades to "fts_only" rather than failing the search —
-     the same never-fatal posture embed.py and triage.py already take.
+In: an open db.py connection, a query string, optionally the query's content
+    words for the keyword side.
+Out: {"ok": True, "backend": "hybrid" | "fts_only" | "vector_only" | "none",
+     "results": [...]} or {"ok": False, "error": str}; never raises. A failed
+     or unavailable embed step degrades to "fts_only" rather than failing the
+     search — the same never-fatal posture embed.py and triage.py already take.
 State: read-only. Calls embed.embed() for the query vector — network,
        best-effort.
 """
@@ -29,23 +30,47 @@ def _pool_size(limit: int) -> int:
     return max(limit * POOL_MULTIPLIER, MIN_POOL)
 
 
-def _fts_ranked_ids(conn, query: str, pool_size: int) -> list:
+def _fts_terms(query: str, terms) -> list:
+    """Reduce a query to MATCH-safe bare terms.
+
+    In: raw query text, caller-supplied content words or None.
+    Out: lowercase terms with FTS5 operator characters stripped, order kept,
+         duplicates dropped; empty when nothing survives.
+    """
+    source = terms if terms else query.split()
+    out = []
+    for raw in source:
+        term = "".join(ch for ch in raw if ch.isalnum() or ch in "-_").strip("-_")
+        term = term.lower()
+        if term and term not in out:
+            out.append(term)
+    return out
+
+
+def _fts_ranked_ids(conn, query: str, pool_size: int, terms=None) -> list:
     """Keyword search, ranked by FTS5's built-in BM25 (ascending = better).
 
-    Out: snippet ids in rank order, best first. A malformed MATCH query
-         (stray quote/operator character in free-form user text) degrades
-         to no keyword candidates rather than raising — vector search
-         alone still produces a usable result.
+    In: connection, raw query, pool size, caller's content words or None.
+    Out: snippet ids in rank order, best first. All terms required first, any
+         term on a second pass when that matches nothing — a sentence-shaped
+         query would otherwise demand its function words too. Empty on a
+         malformed MATCH rather than raising.
     """
-    try:
-        rows = conn.execute(
-            "SELECT rowid FROM snippets_fts WHERE snippets_fts MATCH ? "
-            "ORDER BY bm25(snippets_fts) LIMIT ?",
-            (query, pool_size),
-        ).fetchall()
-    except sqlite3.OperationalError:
+    words = _fts_terms(query, terms)
+    if not words:
         return []
-    return [r[0] for r in rows]
+    for joiner in (" AND ", " OR "):
+        try:
+            rows = conn.execute(
+                "SELECT rowid FROM snippets_fts WHERE snippets_fts MATCH ? "
+                "ORDER BY bm25(snippets_fts) LIMIT ?",
+                (joiner.join(words), pool_size),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        if rows:
+            return [r[0] for r in rows]
+    return []
 
 
 def _vector_ranked_ids(conn, query: str, pool_size: int) -> list:
@@ -129,16 +154,19 @@ def _expand_neighbors(conn, document_id: int, chunk_index) -> tuple:
     return before, after
 
 
-def search(conn, query: str, limit: int = 10) -> dict:
+def search(conn, query: str, limit: int = 10, terms=None) -> dict:
     """Search snippets by keyword and meaning, fused into one ranked list.
 
-    In: query text, max results.
-    Out: {"ok": True, "backend": "hybrid" | "fts_only", "results": [...]}
-         each result: snippet_id, document_id, kind, content, chunk_index,
-         document_title, document_url, ingested_at, context_before,
-         context_after, score (the fused RRF score, for tuning/debugging —
-         never meaningful in isolation, only for ordering).
-         {"ok": False, "error": str} for empty query or non-positive limit.
+    In: query text, max results, the query's content words for the keyword
+        side — the caller holds the question, so it strips function words;
+        omitted falls back to the whole query, sanitized.
+    Out: {"ok": True, "backend": "hybrid" | "fts_only" | "vector_only" |
+         "none", "results": [...]} each result: snippet_id, document_id,
+         kind, content, chunk_index, document_title, document_url,
+         ingested_at, context_before, context_after, score (the fused RRF
+         score, for tuning/debugging — never meaningful in isolation, only
+         for ordering). {"ok": False, "error": str} for empty query or
+         non-positive limit.
     """
     if not query or not query.strip():
         return {"ok": False, "error": "empty query"}
@@ -146,7 +174,7 @@ def search(conn, query: str, limit: int = 10) -> dict:
         return {"ok": False, "error": "limit must be positive"}
 
     pool = _pool_size(limit)
-    fts_ids = _fts_ranked_ids(conn, query, pool)
+    fts_ids = _fts_ranked_ids(conn, query, pool, terms)
     vector_ids = _vector_ranked_ids(conn, query, pool)
     if fts_ids and vector_ids:
         backend = "hybrid"
