@@ -170,9 +170,19 @@ ALTER TABLE snippets ADD COLUMN asset_id INTEGER REFERENCES assets(id);
 
 Why this and not an image column or a parallel search path:
 
-- **Binaries stay on disk, rows stay small.** A `documents.raw_text`-sized
-  BLOB per frame would bloat every table scan `search.py` does, and the cosine
-  scan already reads every embedded row.
+- **Image bytes stay on disk; the row holds a path.** Not for the reason you
+  might assume — SQLite keeps large BLOBs in overflow pages, so a frame column
+  would not slow down `SELECT id, embedding` scans. Measured reality is that
+  SQLite beats the filesystem for ~10KB blobs and loses somewhere between
+  250KiB and 1MiB (sqlite.org/fasterthanfs.html, and the Jim Gray paper it
+  cites); a 720p JPEG frame at ~100–300KB sits on that crossover, so
+  performance does not decide it. The operational arguments do: a vision model
+  is handed a *path*, so a BLOB would have to be exported to a temp file on
+  every look; `rsync`/Time Machine move only changed frames instead of
+  rewriting a multi-GB database file; and the database stays small enough to
+  copy around. The cost accepted in exchange is orphan risk — a deleted row
+  leaves a file behind, and a deleted file leaves a dangling path. `sha256`
+  plus a periodic sweep is the answer, not a schema change.
 - **A frame becomes searchable by becoming a snippet.** The LLM's one-line
   description (and OCR text, if kept) is written as a snippet with
   `kind='frame'` and `asset_id` pointing at the image. It embeds and indexes
@@ -188,6 +198,32 @@ Why this and not an image column or a parallel search path:
   already carry `start`/`end` stamps, so "show me the slide he was on at 14:22"
   is a range query, not string matching.
 
-Not decided: whether a frame's snippet also stores OCR text verbatim (helps
-FTS5, risks noisy matches from slide boilerplate), and whether frames get their
-own `chunk_index` ordering or stay `NULL` like syntheses.
+## 5. Open options — decide when frames are actually built
+
+Both of these are recorded as options, not decisions. Neither should be
+settled on paper; settle them against real extracted frames.
+
+### OCR text in the frame snippet
+
+The description is a retrieval ceiling: words the one-liner omits are not
+indexed, so a search for a component name written inside a diagram finds
+nothing. Appending the frame's OCR text to the snippet `content` would index
+every word on the slide.
+
+| Option | Buys | Costs |
+|---|---|---|
+| Description only | Clean, high-signal snippets; ~100 tokens per hit | Anything not in the one-liner is unfindable |
+| Description + OCR verbatim | Every on-slide word is keyword-searchable | Slide boilerplate ("Confidential", footer names, page numbers) matches constantly; dilutes the embedding |
+| Description + filtered OCR | Most of the recall, less noise | Needs a filter that is itself a judgment call — boilerplate detection across decks |
+| OCR in a separate column, FTS-indexed but not embedded | Keyword recall without polluting the vector | `snippets_fts` is external-content over `content`; needs a second indexed column and a trigger change |
+
+Leaning: the fourth, because it separates the two indexes' jobs — but it is
+the only one that touches the schema, so it needs real frames to justify.
+
+### Ordering
+
+Whether frames get their own `chunk_index` sequence (so neighbor expansion can
+return the slide before and after) or stay `NULL` like syntheses. `chunk_index`
+currently means "position in document order" for transcript chunks; frames
+share the timeline but not the sequence, so reusing the column may overload it.
+`stamp_seconds` on `assets` may make ordering a join rather than a column.
