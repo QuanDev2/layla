@@ -38,10 +38,6 @@ touching a module, not this file.
   holds a bold lead and nothing else with detail in sub-bullets, three-to-five
   claims max, one `**Verdict:**` line, no emoji.
 - **Diagrams carry numbered boxes** so they can be referenced by number later.
-- **That file is versioned** at `~/.config/agent/AGENTS.md` (symlinked from
-  `~/.omp/agent/`) in the private `QuanDev2/dotconfig` repo. SSH port 22 is
-  blocked on this machine — pushes need
-  `GIT_SSH_COMMAND='ssh -p 443 -o Hostname=ssh.github.com'`.
 - **Docstrings:** imperative one-liner, then `In:` / `Out:` / `State:`
   fragments. No history, no rationale prose.
 
