@@ -13,6 +13,27 @@ Full decision log: `docs/decisions.md` (21 numbered decisions, do not
 re-litigate). Architecture: `docs/system-overview.md`. Read those before
 touching a module, not this file.
 
+## What changed on 2026-09-21
+
+- **Chapters now own transcript chunk boundaries.** `youtube.video_chapters()`
+  fetches a video's published chapters; `chunker.chunk_transcript(chapters=…)`
+  turns each into a fixed level-2 point the heading model cannot move. The
+  model's remit shrank to naming and subdividing: one level-3 subheading per
+  chapter, plus extra splits inside a chapter over `TARGET_CHARS`.
+  `_chapter_complaints()` audits that contract and feeds the existing retry.
+- **The prompt had to name each required block.** The first run left six of
+  nine chapters unlabeled; listing "heading required at block N" per chapter
+  plus a minimum element count fixed it. Prompt change, not code.
+- **Document 3 (Laura VonV, quality clothing) rewritten** with that path —
+  9 old snippets deleted, 11 written, all embedded, status `kept`. Prefixes
+  now read `Button test > Metal buttons beat plastic in durability`.
+- **Silenced a false numpy warning in `search.py`.** Apple's math library
+  leaves the chip's error flags set while computing padding lanes it throws
+  away; numpy reads them afterward and blames the multiply. Reproduced on
+  constant data. `np.errstate` around the multiply only, plus a real
+  zero-length-vector guard so a genuine case cannot hide behind it. Remove
+  the errstate at numpy >= 2.3.1, which needs Python >= 3.10.
+
 ## What changed on 2026-09-20
 
 - **Dropped `summarizer_agent.py`** (decision 7 rewritten as rejected). The
@@ -36,7 +57,13 @@ touching a module, not this file.
   talk" / "What you say" sections: `##` headings only (the renderer prints
   `###` literally), flat numbering so claims can be cited back, a numbered line
   holds a bold lead and nothing else with detail in sub-bullets, three-to-five
-  claims max, one `**Verdict:**` line, no emoji.
+  claims max, one `**Verdict:**` line, no emoji. A many-section breakdown
+  switches to hierarchical numbering (`5.1` under heading `5.`) with `▸`/`◦`
+  glyphs — see "Multi-section breakdowns" in that file.
+- **Plain terms by default.** Explanations target a tech enthusiast: no
+  acronyms or library names where a plain description works ("Apple's math
+  library", not "Accelerate"). Real names only when asked to get technical.
+  Asked for N sentences means exactly that — no bullets, no trailing offer.
 - **Diagrams carry numbered boxes** so they can be referenced by number later.
 - **Docstrings:** imperative one-liner, then `In:` / `Out:` / `State:`
   fragments. No history, no rationale prose.
@@ -47,12 +74,12 @@ touching a module, not this file.
 |---|---|
 | `db.py` | Schema (`documents`, `snippets`, `snippets_fts`, `entities`, `observations`) + connection helper; FTS5 kept in sync by triggers |
 | `ingest.py` | Captures already-fetched text into a `documents` row, dedupes by URL |
-| `chunker.py` | Segments a document, proposes headings via a pluggable LLM backend, splits into ~1,800-char chunks with context prefixes |
-| `heading_agent.py` | The heading-proposal call chunker.py wraps (omp \| anthropic \| off) |
+| `chunker.py` | Segments a document, proposes headings via a pluggable LLM backend, splits into ~1,800-char chunks with context prefixes; fixes boundaries at a video's chapters when given them |
+| `heading_agent.py` | The heading-proposal call chunker.py wraps (omp \| anthropic \| off); works inside fixed chapters when passed them |
 | `triage.py` | Writes confirmed excerpts/synthesis/rejections/chunks into `snippets`, batch-embeds |
 | `embed.py` | Voyage AI (`voyage-4`), float32 blob codec, `.env` loader |
 | `search.py` | Hybrid FTS5 + cosine, fused by RRF, neighbor expansion; takes caller-extracted `terms` |
-| `youtube.py` | Captions with two-source fallback + title/channel/duration via yt-dlp |
+| `youtube.py` | Captions with two-source fallback + title/channel/duration + published chapters via yt-dlp |
 | `entities.py` | Registry of people/things with alias resolution; `resolve` returns candidates, never picks |
 | `observations.py` | Exact-lookup personal memory: structured `attribute`/`value` or prose `body`, superseded rather than overwritten |
 | `dev/judge.py`, `dev/eval.py` | Dev-only heading grading harness; nothing in the workflow calls them |
@@ -93,6 +120,16 @@ than a guess. Schema applied to the live database — 2 documents and 13
 snippets intact, existing hybrid search unaffected. Not yet exercised in a
 real conversation.
 
+Chapter chunking (2026-09-21) verified against the real video end to end:
+`video_chapters()` returned 9 published chapters; boundaries mapped to the
+exact caption segments (`Lining` → block 155 → `[05:40]`); the full run came
+back `backend=chapters+omp` with 19 points and 11 chunks, every chapter
+labeled and only the 3,149-char "Fabric Quality" subdivided. Degradation
+checked too: `--no-llm` with chapters gives `backend=chapters` and 10 chunks,
+a chapterless transcript still gives 7, the article fixture still gives 8.
+After the rewrite, "how to tell if denim buttons are cheap" returns the
+`Button test` snippet first, `backend: hybrid`.
+
 ## Next steps
 
 - Personal memory is built and holds its first real row — the `self` entity
@@ -100,6 +137,11 @@ real conversation.
   conversation.
 - Frame extraction remains designed-but-unbuilt: plan and proposed schema in
   `docs/youtube.md`.
+- The corpus is 3 documents / 24 snippets. Retrieval quality past one
+  creator per topic is untested — a second clothing source would be the
+  first real test of ranking across sources.
+- `dev/judge.py` has never been run against the chapter path; heading quality
+  there is unmeasured.
 
 ## Parked: identity and identifiers (2026-09-21, paused mid-discussion)
 
