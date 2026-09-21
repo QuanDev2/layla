@@ -83,9 +83,9 @@ def _vector_ranked_ids(conn, query: str, pool_size: int) -> list:
          nothing and the backend label only needs to know that.
     State: rows are filtered to embedding_model == the model that embedded
            this query — decision 5/15's guard against comparing vectors
-           from incompatible spaces. A row with no embedding yet (NULL) or
-           from a stale provider is simply invisible to vector search,
-           still fully reachable via FTS5.
+           from incompatible spaces. A row with no embedding yet (NULL),
+           from a stale provider, or holding an all-zero vector is simply
+           invisible to vector search, still fully reachable via FTS5.
     """
     embedded = embed_mod.embed([query], input_type="query")
     if not embedded.get("ok"):
@@ -102,9 +102,22 @@ def _vector_ranked_ids(conn, query: str, pool_size: int) -> list:
 
     ids = [r[0] for r in rows]
     matrix = np.stack([embed_mod.from_blob(r[1]) for r in rows])
-    matrix_norm = matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
-    query_norm = query_vec / np.linalg.norm(query_vec)
-    scores = matrix_norm @ query_norm
+    norms = np.linalg.norm(matrix, axis=1)
+    usable = norms > 0
+    if not usable.any():
+        return []
+    ids = [i for i, keep in zip(ids, usable) if keep]
+    matrix_norm = matrix[usable] / norms[usable][:, None]
+    query_len = np.linalg.norm(query_vec)
+    if query_len == 0:
+        return []
+    query_norm = query_vec / query_len
+    # Apple's math library leaves the chip's error flags set while doing
+    # throwaway padding work; numpy reads them afterward and warns about a
+    # multiply that was correct. Drop this errstate once the project runs
+    # numpy >= 2.3.1, which needs Python >= 3.10.
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        scores = matrix_norm @ query_norm
 
     order = np.argsort(-scores)[:pool_size]
     return [ids[i] for i in order]
