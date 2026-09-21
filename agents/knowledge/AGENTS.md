@@ -4,7 +4,9 @@ Read this when the user shares something to learn from — article, link,
 pasted text, transcript — or asks what was already learned ("remind me
 what we learned about X"). Design/decision log:
 `agents/knowledge/pipeline/PLAN.md` — read it before changing any module;
-never re-litigate its decisions.
+never re-litigate its decisions. Architecture and data flow at a glance:
+`agents/knowledge/system-overview.md` (numbered diagrams for ingestion,
+chunking, and retrieval).
 
 ## Tools
 
@@ -141,9 +143,9 @@ for confirmation, then write. Never auto-select text.
   into conversation.
 - Never search or chunk from `documents.raw_text` directly; snippets are
   the only retrievable unit.
-- Never delegate single-article triage or search to a subagent. Bulk
-  import (summarizer_agent.py) is the one delegated path — not built
-  yet; handle articles one at a time.
+- Never delegate triage or search to a subagent. Every article is
+  handled one at a time in this conversation; there is no bulk path
+  (decision 7, dropped).
 - `heading_agent.py` is wrapped by chunk.py, never called directly.
   `judge.py` / `eval.py` are a dev-only grading harness; no workflow
   here calls them.

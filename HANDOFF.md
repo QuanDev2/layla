@@ -3,11 +3,11 @@
 ## Status
 - **YouTube**: ingest pipeline built and verified against real videos. Frame
   extraction is specified but unbuilt. Not yet run against your real playlist.
-- **Knowledge**: core pipeline built and **used for real** — document 1
-  (Anthropic's "Scaling Managed Agents") was captured, triaged in
-  conversation, and closed as `kept`: 12 snippets, all embedded, searchable.
-  Hybrid search was found broken during that run and fixed the same day.
-  `summarizer_agent.py` (bulk import) is the one unbuilt piece left.
+- **Knowledge**: complete and **used for real** — document 1 (Anthropic's
+  "Scaling Managed Agents") was captured, triaged in conversation, and
+  closed as `kept`: 12 snippets, all embedded, searchable. Hybrid search
+  was found broken during that run and fixed the same day. Nothing is
+  unbuilt; `summarizer_agent.py` was dropped (decision 7).
   Full decision log (19+ numbered decisions) lives in
   `agents/knowledge/pipeline/PLAN.md` — read that before touching the domain,
   not this file.
@@ -26,8 +26,8 @@
   existing login and costs nothing since results are only read when you sit
   down.
 - **Tools are plumbing.** Plain scripts, no LLM calls of their own, except the
-  explicitly-named agent wrappers (`agent.py`, `heading_agent.py`,
-  `summarizer_agent.py`) that exist specifically to make one.
+  explicitly-named agent wrappers (`agent.py`, `heading_agent.py`) that
+  exist specifically to make one.
 - **Credentials: tools hold capabilities, Layla holds none.** Secrets go from
   keychain/env/`.env` into the tool process, never into conversation. Narrow
   provider scopes; confirm before mutating.
@@ -94,7 +94,8 @@
 
 ## Knowledge domain
 
-Full design/decision log: `agents/knowledge/pipeline/PLAN.md`. Summary only below.
+Full design/decision log: `agents/knowledge/pipeline/PLAN.md`. Architecture
+and data flow: `agents/knowledge/system-overview.md`. Summary only below.
 
 ### Built — the whole core pipeline
 | Path | Does |
@@ -108,10 +109,12 @@ Full design/decision log: `agents/knowledge/pipeline/PLAN.md`. Summary only belo
 | `search.py` | Hybrid search: FTS5 (BM25) + cosine, fused by Reciprocal Rank Fusion, neighbor expansion. Takes caller-extracted `terms` for the keyword side |
 | `judge.py` / `eval.py` | Dev-only grading harness for `heading_agent.py` — not production, not in the original plan |
 
-### Not built
-- `summarizer_agent.py` — bulk-import bootstrapped subagent (many articles
-  at once). Single-article flow (`ingest.py`/`triage.py` called directly in
-  conversation) is complete and does not need this to work.
+### Not built, and won't be
+- `summarizer_agent.py` — bulk-import subagent, dropped 2026-09-20 with
+  decision 7. The workflow is one article at a time, chosen deliberately;
+  bulk mode keeps source text out of Layla's context, which is exactly what
+  single-article discussion needs, so it would be dead code. Revisit only if
+  a real backlog dump ever arrives.
 
 ### Key decisions worth knowing before touching this domain
 - **SQLite, not a vector database.** Brute-force cosine in numpy beats an ANN
@@ -150,15 +153,17 @@ sentence queries report `backend: hybrid`; a query whose terms are absent
 from the corpus still reports `vector_only`, which is correct, not a
 regression.
 
+Prefix fix (2026-09-20) verified on real fixtures: exact-match title,
+near-miss title, no title (H1 becomes the title), and a document with no
+H1 all produce the right prefix; `train-llm-from-scratch.md` still splits
+into 31 chunks with each prefix 25 chars shorter, and chunk bodies are
+text-identical to the source.
+
 ### Next steps
-1. `summarizer_agent.py` — bulk-import subagent. Settle what counts as
-   "bulk" first; the single-article flow is proven and doesn't need it.
-2. Decide `judge.py`'s role: synchronous quality gate on chunking, or
-   offline audit only. Nothing calls it today.
-3. Fix the doubled title in chunk context prefixes — every chunk's prefix
-   reads `<title> > <title> > <heading>`. Harmless for search, wastes
-   prefix chars in every embedded chunk.
+- None. The domain is complete for the single-article workflow it serves.
+  Document 1's 12 snippets still carry the old doubled-title prefix; they
+  are searchable and correct, so re-chunking them is optional cleanup, not
+  a fix.
 
 ### Open questions
-- None blocking. `summarizer_agent.py`'s exact trigger (how many articles at
-  once counts as "bulk") is worth settling before building it, not before now.
+- None.

@@ -482,22 +482,44 @@ def build_prefix(source_kind: str, doc_title: str, heading_path: list,
     return " > ".join(parts)
 
 
+def _own_h1(units: list) -> str:
+    """Read the document's own level-1 heading.
+
+    In: units.
+    Out: the first "#" heading's title, "" when the document has none.
+    """
+    for unit in units:
+        own = _heading_unit(unit)
+        if own and own[0] == 1:
+            return own[1]
+    return ""
+
+
 def _build_chunks(text: str, sections: list, source_kind: str,
-                  doc_title: str, channel: str) -> list:
+                  doc_title: str, channel: str, own_h1: str = "") -> list:
     """Turn sections into stored candidate chunks.
 
-    In: source text, sections, source kind, title, channel.
+    In: source text, sections, source kind, title, channel, the document's
+        own level-1 heading.
     Out: chunks with prefix, content, chars, over_cap, and timestamp
          range. A body is sliced by character offset, so whitespace
          between units is preserved exactly as written. chars and the cap
-         check count the prefix too — that is what gets embedded.
+         check count the prefix too — that is what gets embedded. When a
+         doc_title is given, the document's own H1 is dropped from every
+         heading path: both fill the title slot, so keeping the pair spends
+         prefix chars on a repeat in every embedded chunk. Without a
+         doc_title the H1 stays — it is then the only title there is.
     """
     chunks = []
+    drop_h1 = bool((doc_title or "").strip()) and bool(own_h1)
     for section in sections:
+        path = section["heading_path"]
+        if drop_h1 and path and path[0] == own_h1:
+            path = path[1:]
         for group in split_body(section["units"]):
             body = text[group[0]["start"]:group[-1]["end"]]
             start, end = group[0]["stamp"], group[-1]["stamp"]
-            prefix = build_prefix(source_kind, doc_title, section["heading_path"],
+            prefix = build_prefix(source_kind, doc_title, path,
                                   start=start, end=end, channel=channel)
             content = f"{prefix}\n\n{body}" if prefix else body
             chunks.append({
@@ -576,7 +598,8 @@ def _chunk(text: str, source_kind: str, doc_title: str, channel: str, use_llm: b
         "backend": backend,
         "headings_inserted": len(points),
         "structured_text": apply_points(text, units, points),
-        "chunks": _build_chunks(text, sections, source_kind, doc_title, channel),
+        "chunks": _build_chunks(text, sections, source_kind, doc_title, channel,
+                                own_h1=_own_h1(units)),
     }
 
 

@@ -5,7 +5,7 @@ schema: drafted
 scripts: chunk.py complete (steps 1-7) and heading_agent.py built; judge.py
   and eval.py also built (dev-only grading harness, not in original plan —
   see "Grading harness" note under Step 3); db.py, embed.py, triage.py,
-  ingest.py, search.py built; summarizer_agent.py unbuilt
+  ingest.py, search.py built; summarizer_agent.py dropped (decision 7)
 ---
 
 # Knowledge domain — design log
@@ -66,14 +66,18 @@ read it before re-litigating anything below.
    `fastembed`'s default (`bge-small-en-v1.5`) was rejected in favor of this
    because `bge-small` caps at 512 input tokens, forcing aggressive chunking
    of whole articles; EmbeddingGemma runs 2,048.
-7. **Bulk import gets a bootstrapped subagent; single-article triage does
-   not.** Mirrors `agents/youtube/agent.py` exactly: a blank `omp -p`
-   subprocess per item, `--tools read,write` only (never `task` — must not
-   spawn further subagents), `--no-session`, fixed output contract. Used
-   only when many articles arrive at once and summarizing article #7 doesn't
-   need to know about article #3 or the current conversation. It produces a
-   *candidate* summary only — the keep/discard call always happens in
-   Layla's own context, never inside the bootstrapped subagent.
+7. **Bulk import via bootstrapped subagent: rejected, not deferred.**
+   Original decision: many articles at once get a blank `omp -p` subprocess
+   each, mirroring `agents/youtube/agent.py`, producing candidate summaries
+   only. **Dropped 2026-09-20** — the user's workflow is one article at a
+   time, chosen deliberately and discussed live. Bulk mode's whole mechanism
+   is keeping source text *out* of Layla's context, which is precisely what
+   single-article discussion needs, so the trigger condition never fires and
+   `summarizer_agent.py` would be dead code. Single-article ingest/triage and
+   all retrieval stay in Layla's own context (decision 1). Revisit only if a
+   real backlog dump ever arrives — material the user never chose one at a
+   time, wanting a "which of these matter" verdict rather than a
+   conversation.
 8. **No automatic entity extraction (Mem0-style).** Mem0's entity signal
    compensates for two things this corpus doesn't have: atomic
    one-line auto-extracted facts, and pronoun-heavy conversational text.
@@ -156,6 +160,19 @@ read it before re-litigating anything below.
     an endorsement — and `search.py` can then surface it when a later
     document repeats the rejected claim. Offered and confirmed, never
     automatic, consistent with decisions 10 and 14.
+20. **`judge.py` is an offline audit, never a synchronous gate.** Decided
+    2026-09-20, closing the open question under Step 3. `chunk.py` never
+    calls it: `_resolve_points` keeps its structural `validate_points`
+    check plus one scoped retry, and nothing grades heading *quality* on
+    the ingest path. A gate would add a second whole-document LLM call to
+    a pass that already runs up to 7 minutes, and would couple two
+    independent failures — a judge timeout would fail chunking for a
+    document whose headings were fine. It would also automate a judgment
+    the user already makes: `chunk.py --table` shows every proposed chunk
+    before a row is written, so a human gate exists at the only moment it
+    matters. Judge runs only from `eval.py`, by hand, when the heading
+    prompt or model changes. Choosing this changed zero lines of code —
+    it is the behavior that already shipped.
 
 ## Schema (drafted, not yet built)
 
@@ -226,10 +243,9 @@ agents/knowledge/
                        off) (built, step 3)
   judge.py          — NOT in original plan. Grades heading_agent's points for
                        essence-vs-topic-label quality (score, grade, reasoning,
-                       excerpt per heading). Production module, omp default,
-                       shares KNOWLEDGE_LLM with heading_agent.py. How it plugs
-                       into the chunk.py pipeline (synchronous gate vs. offline
-                       audit) is not yet decided — see Step 3 note below.
+                       excerpt per heading). omp default, shares KNOWLEDGE_LLM
+                       with heading_agent.py. Offline audit only — called by
+                       eval.py, never by chunk.py (decision 20).
   eval.py           — NOT in original plan, NOT production. Dev-only manual
                        tuning harness: runs heading_agent + judge.py once at
                        whatever model/effort heading_agent.py currently
@@ -241,8 +257,8 @@ agents/knowledge/
   triage.py         — write snippets from triage decisions (built)
   embed.py          — provider abstraction (Voyage now, swappable to local) (built)
   search.py         — hybrid search: BM25 + cosine, fused by RRF (built)
-  summarizer_agent.py  — bulk-import only; bootstrapped subagent, mirrors
-                          agents/youtube/agent.py
+  summarizer_agent.py  — NOT BUILT, will not be built. Bulk-import subagent,
+                          dropped with decision 7.
   data/             — gitignored: knowledge.db; also holds verification
                        fixtures. Current set (2026-09-06): data/articles/
                        (3 articles — train-llm-from-scratch.md is densely
@@ -421,8 +437,7 @@ marker with no marker leaking into two units.
 
 #### Step 3 — `agents/knowledge/heading_agent.py`: heading-insertion call
 
-Named for the sibling convention (`agents/youtube/agent.py`, and
-`summarizer_agent.py` in this domain's planned layout) — a module that wraps a
+Named for the sibling convention (`agents/youtube/agent.py`) — a module that wraps a
 headless `omp -p` subprocess. Module names cannot contain hyphens and stay
 importable, so the underscore form is the available one.
 
@@ -794,6 +809,18 @@ an untitled document or an unnamed channel degrades cleanly instead of emitting
 check both count the full `content` including the prefix, since that is what gets
 embedded.
 
+**Revised (2026-09-20): the document's own H1 never repeats the title.**
+`split_sections` puts a document's level-1 heading at `heading_path[0]`, so with
+a `doc_title` supplied every prefix read `Title > Title > Section` — the title
+slot filled twice, ~25 wasted chars inside every embedded chunk. `_build_chunks`
+now drops `heading_path[0]` when it is the document's own H1 (`_own_h1(units)`)
+*and* a `doc_title` was given. Without a `doc_title` the H1 stays, since it is
+then the only title there is. Done in `_build_chunks`, not `build_prefix`: the
+prefix builder joins whatever path it is handed and has no way to know which
+entry came from an H1. Near-miss titles (`"Train an LLM from scratch"` vs the
+file's `"Train LLM From Scratch"`) are also collapsed, because the test is
+structural — did this come from the H1 — not string equality.
+
 `video_title` and `channel` are optional parameters, not read from disk —
 `transcript.md`'s frontmatter carries `video_id`/`url`/`language` only, while
 `title`/`channel` live in the sibling `summary.md` (`agents/youtube/index.py:_FIELDS`).
@@ -983,8 +1010,8 @@ candidate table) are built and verified against real fixtures.
 see the Repo layout note under Step 3 for why the latter two exist.
 `db.py`, `embed.py`, `triage.py`, `ingest.py`, and `search.py` are also
 built (schema/connection helper, Voyage provider abstraction, snippet
-writer, document capture, hybrid retrieval). `summarizer_agent.py` and
-`agents/knowledge/AGENTS.md` are still unbuilt.
+writer, document capture, hybrid retrieval), as is `agents/knowledge/AGENTS.md`.
+`summarizer_agent.py` was dropped with decision 7 and will not be built.
 
 **Verification results (2026-09-06, all seven Step 7 / Step 4-6 checks):**
 
@@ -1089,14 +1116,14 @@ adjacent-chunk content; a discarded neighbor's gap never falls back to
 `raw_text`; a snippet with a stale `embedding_model` is correctly
 invisible to vector search while staying keyword-searchable.
 
-**Next: `agents/knowledge/AGENTS.md`** (the domain workflow instructions
-Layla actually reads — nothing in this domain is usable from a live
-conversation until this exists) and `summarizer_agent.py` (bulk-import
-subagent, decision 7) are the last two files in the domain.
+**Next: nothing unbuilt.** `agents/knowledge/AGENTS.md` (the domain workflow
+instructions Layla actually reads) is written, and `summarizer_agent.py` was
+dropped with decision 7. The domain is complete for the single-article
+workflow it serves.
 
-**Still undecided:** how `judge.py` plugs in — synchronous quality gate on
-`_resolve_points`, or offline audit only. Nothing in `chunk.py` calls it
-today.
+**Settled (2026-09-20):** `judge.py` is an offline audit, never a
+synchronous gate — see decision 20. Nothing in `chunk.py` calls it, and
+nothing should.
 
 **Fixture gap closed**: `data/articles/train-llm-from-scratch.md` (30 real
 headings, densely covers the whole document) now serves Step 3 check 2 and

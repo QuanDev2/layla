@@ -1,8 +1,8 @@
 """Capture raw content into a documents row. Nothing else.
 
-Layla (or the bulk-import subagent) fetches content with the `read` tool
-first; this module never fetches anything itself and never calls an LLM —
-it only persists text that's already in hand.
+Layla fetches content with the `read` tool first; this module never fetches
+anything itself and never calls an LLM — it only persists text that's
+already in hand.
 
 In: already-obtained text, its source_type, and optional url/title.
 Out: {"ok": True, "document_id": int, "duplicate": bool} — duplicate is
@@ -58,9 +58,7 @@ def set_summary(conn, document_id: int, summary: str) -> dict:
     """Record the discussion summary for a captured document.
 
     In: document_id, summary text — written by Layla after discussing the
-        document in conversation (single-article path, decision 1) or by
-        summarizer_agent.py (bulk path, decision 7). This module has no
-        opinion on which; it just stores whatever text it's given.
+        document in conversation (decision 1).
     Out: {"ok": True} or {"ok": False, "error": str} for a missing
          document or empty summary.
     """
