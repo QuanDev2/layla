@@ -12,5 +12,5 @@ __pycache__/
 .env
 
 # eval harness scratch — dev-only, not source
-agents/knowledge/eval.md
-agents/knowledge/eval_runs/
+dev/eval.md
+dev/eval_runs/

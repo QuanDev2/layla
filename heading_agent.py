@@ -225,7 +225,7 @@ def invoke(path: str, kind: str = "article", model: str = DEFAULT_MODEL,
     """
     # Local import: chunk.py imports this module for its own retry orchestration
     # (PLAN.md step 4); importing chunk at module load time here would cycle.
-    from agents.knowledge.chunk import segment_units
+    from chunker import segment_units
 
     try:
         text = Path(path).read_text()

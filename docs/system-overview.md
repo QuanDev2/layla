@@ -1,9 +1,9 @@
-# Knowledge domain — system overview
+# System overview
 
-*agents/knowledge/ · 8 modules + 1 SQLite file · written 2026-09-20*
+*flat repo root · 9 modules + 1 SQLite file · updated 2026-09-20*
 
 Bird's-eye view of the architecture and data flow. Design rationale and the
-numbered decision log live in `pipeline/PLAN.md`; the workflow Layla follows
+numbered decision log live in `docs/decisions.md`; the workflow Layla follows
 lives in `AGENTS.md`. This file is the map, not the rules.
 
 Diagram boxes are numbered so they can be referenced by number.
@@ -12,10 +12,12 @@ Diagram boxes are numbered so they can be referenced by number.
 
 ## 1. The shape of the system
 
-You and Layla hold the conversation; eight plain Python modules hold the
+You and Layla hold the conversation; nine plain Python modules hold the
 plumbing; one SQLite file holds everything permanent. Nothing runs on its
 own — every module is a library call Layla makes during a conversation, and
-text only becomes searchable when you say so.
+text only becomes searchable when you say so. Articles, pasted text, and
+YouTube videos all enter through the same path; a video is just a document
+with `source_type='transcript'`.
 
 Three stages: **capture → triage → retrieve**, with a chunker hanging off the
 middle.
@@ -30,12 +32,14 @@ middle.
 
 ```mermaid
 flowchart TD
+    A0["0. A YouTube URL"] --> A0b["0b. youtube.py: captions + title/channel"]
+    A0b --> A2
     A1["1. You paste text or a link"] --> A2["2. Layla reads it, gives the gist"]
     A2 --> A3["3. ingest.capture()"]
     A3 --> A4[("4. documents<br/>raw_text, pristine")]
     A2 --> A5["5. Q&A in conversation"]
     A5 --> A6{"6. You decide"}
-    A6 -->|keep whole| A7["7. chunk.py --table"]
+    A6 -->|keep whole| A7["7. chunker.py --table"]
     A6 -->|keep a part| A8["8. triage.write_excerpt()"]
     A6 -->|answer worth keeping| A9["9. triage.write_synthesis()"]
     A6 -->|claim is wrong| A10["10. triage.write_rejection()"]
@@ -128,12 +132,13 @@ flowchart TD
 |---|---|---|
 | `db.py` | Schema + connection helper. Applies schema on first connect. | every module |
 | `ingest.py` | Writes the `documents` row. Never fetches, never calls an LLM. | Layla |
-| `chunk.py` | Splits a document into ~1,800-char candidate chunks with context prefixes. Only module with a CLI. | Layla |
-| `heading_agent.py` | Proposes heading insertion points for unstructured text. | `chunk.py` only |
+| `chunker.py` | Splits a document into ~1,800-char candidate chunks with context prefixes. CLI. | Layla |
+| `heading_agent.py` | Proposes heading insertion points for unstructured text. | `chunker.py` only |
+| `youtube.py` | Fetches a video's captions (two sources, fallback) and its title/channel/duration. CLI. | Layla |
 | `triage.py` | Writes `snippets`, batch-embeds them. The only write path into the corpus. | Layla |
 | `embed.py` | Voyage `voyage-4`, float32 blob codec, `.env` key loading. | `triage.py`, `search.py` |
 | `search.py` | BM25 + cosine, fused by RRF, neighbor expansion, source metadata. | Layla |
-| `judge.py` / `eval.py` | Offline grading of heading quality. Dev-only. | nothing in the workflow |
+| `dev/judge.py`, `dev/eval.py` | Offline grading of heading quality. Dev-only. | nothing in the workflow |
 
 ---
 
@@ -148,6 +153,9 @@ flowchart TD
   source text out of Layla's context — is exactly what discussion needs.
 - **No scheduler, no daemon, no router process.** Every arrow in every diagram
   above is either you talking or Layla making a library call.
+- **No playlist triage, no markdown store, no frame extraction.** The YouTube
+  domain was folded into one fetcher (decision 21); `docs/youtube.md` holds
+  the frame plan and the schema it would need.
 
 ---
 

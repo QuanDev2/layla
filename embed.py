@@ -47,7 +47,7 @@ def _load_dotenv() -> None:
          optional backend if this module has already been imported.
     State: mutates os.environ.
     """
-    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    env_path = Path(__file__).resolve().parent / ".env"
     if not env_path.exists():
         return
     for line in env_path.read_text().splitlines():

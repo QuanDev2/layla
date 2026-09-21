@@ -1,20 +1,25 @@
 ---
-status: design
-updated: 2026-09-06
-schema: drafted
-scripts: chunk.py complete (steps 1-7) and heading_agent.py built; judge.py
-  and eval.py also built (dev-only grading harness, not in original plan —
-  see "Grading harness" note under Step 3); db.py, embed.py, triage.py,
-  ingest.py, search.py built; summarizer_agent.py dropped (decision 7)
+status: built
+updated: 2026-09-20
+schema: built
+scripts: chunker.py, heading_agent.py, db.py, embed.py, triage.py, ingest.py,
+  search.py, youtube.py built; dev/judge.py + dev/eval.py are a dev-only
+  grading harness (not in the original plan — see "Grading harness" under
+  Step 3); summarizer_agent.py dropped (decision 7)
 ---
 
-# Knowledge domain — design log
+# Design log
 
-Continuous-learning system: feed in articles, triage them conversationally,
-keep what's worth keeping, retrieve it later ("remind me what we learned
-about X," "apply the article from last week to what we're building"). This
-file is the "what we decided and why," written as the decisions were made —
-read it before re-litigating anything below.
+Continuous-learning system: feed in articles and video transcripts, triage
+them conversationally, keep what's worth keeping, retrieve it later ("remind
+me what we learned about X," "apply the article from last week to what we're
+building"). This file is the "what we decided and why," written as the
+decisions were made — read it before re-litigating anything below.
+
+Paths below predate the 2026-09-20 flatten in places: `agents/knowledge/X.py`
+is now `X.py` at the repo root, `chunk.py` is `chunker.py`, and the YouTube
+domain folded into `youtube.py` (decision 21). The reasoning is unchanged; a
+decision log that edits its own history is worthless.
 
 ## Confirmed decisions (do not re-litigate)
 
@@ -173,8 +178,29 @@ read it before re-litigating anything below.
     matters. Judge runs only from `eval.py`, by hand, when the heading
     prompt or model changes. Choosing this changed zero lines of code —
     it is the behavior that already shipped.
+21. **One agent, flat repo root; the YouTube domain folded in.** Decided
+    2026-09-20. The Layla-orchestrator-plus-domain-registry structure was
+    dropped: `agents/knowledge/*.py` and `agents/youtube/run.py` moved to
+    the repo root, `chunk.py` became `chunker.py` (the old name shadows a
+    Python 3.9 stdlib module), and `judge.py`/`eval.py` moved to `dev/`.
+    Rationale: the registry's founding principle — the discussion/verdict
+    mode split — had no remaining instance once `summarizer_agent.py`
+    (decision 7) and the YouTube summarizer subagent were both cut, so it
+    routed nothing. Email and calendar, the domains it was built to
+    accommodate, were never designed past a wish list.
+    What was deleted with the YouTube domain: playlist listing, the
+    per-video summarizer subagent, the one-call playlist ingest pipeline,
+    the `INDEX.md` regenerator, and the markdown store under `data/videos/`
+    — playlist triage was never run against a real playlist, and the
+    markdown store duplicated text `knowledge.db` already holds. What was
+    kept, because it was won against real videos rather than designed:
+    the two-source caption fetch with fallback, the rolling-caption dedupe,
+    and the hard-line-break normalization. `playlist.py`'s single-video
+    metadata lookup survives as `youtube.video_metadata()`, which supplies
+    the title and channel `chunk_transcript` needs for its prefix.
+    A video is now just a document with `source_type='transcript'`.
 
-## Schema (drafted, not yet built)
+## Schema (built; see db.py)
 
 ```sql
 CREATE TABLE documents (
@@ -230,51 +256,52 @@ flowchart TD
     M --> N[Agent synthesizes answer, cites source]
 ```
 
-## Repo layout (chunk.py/heading_agent.py built; rest planned)
+## Repo layout (current, post-flatten)
 
 ```
-agents/knowledge/
-  AGENTS.md         — domain instructions Layla reads for knowledge-touching requests
+layla/
+  AGENTS.md         — the agent's whole instruction set: tools, workflows, style
+  README.md         — public front door
   db.py             — schema + connection helper
-  ingest.py         — capture: create documents row, no fetching (built)
-  chunk.py          — unit segmentation, validation/repair, structural split,
-                       context prefixes, public API + CLI (built, steps 1-7)
-  heading_agent.py  — heading-insertion call; pluggable backend (omp | anthropic |
-                       off) (built, step 3)
-  judge.py          — NOT in original plan. Grades heading_agent's points for
+  ingest.py         — capture: create documents row, no fetching
+  chunker.py        — unit segmentation, validation/repair, structural split,
+                       context prefixes, public API + CLI
+  heading_agent.py  — heading-insertion call; pluggable backend (omp | anthropic | off)
+  triage.py         — write snippets from triage decisions
+  embed.py          — provider abstraction (Voyage now, swappable to local)
+  search.py         — hybrid search: BM25 + cosine, fused by RRF
+  youtube.py        — captions (two sources, fallback) + video metadata
+  dev/
+    judge.py        — NOT in original plan. Grades heading_agent's points for
                        essence-vs-topic-label quality (score, grade, reasoning,
-                       excerpt per heading). omp default, shares KNOWLEDGE_LLM
-                       with heading_agent.py. Offline audit only — called by
-                       eval.py, never by chunk.py (decision 20).
-  eval.py           — NOT in original plan, NOT production. Dev-only manual
-                       tuning harness: runs heading_agent + judge.py once at
+                       excerpt per heading). Offline audit only — called by
+                       eval.py, never by chunker.py (decision 20).
+    eval.py         — NOT in original plan, NOT production. Dev-only manual
+                       tuning harness: runs heading_agent + judge once at
                        whatever model/effort heading_agent.py currently
                        defaults to, across a fixed doc set, appends a
-                       human-readable report to eval.md. No config sweep —
-                       unlike the candidate-comparison eval.py sketched for
-                       agents/youtube/PLAN.md, this one exists to eyeball
-                       prompt/model changes by hand, not to auto-pick a winner.
-  triage.py         — write snippets from triage decisions (built)
-  embed.py          — provider abstraction (Voyage now, swappable to local) (built)
-  search.py         — hybrid search: BM25 + cosine, fused by RRF (built)
-  summarizer_agent.py  — NOT BUILT, will not be built. Bulk-import subagent,
-                          dropped with decision 7.
-  data/             — gitignored: knowledge.db; also holds verification
-                       fixtures. Current set (2026-09-06): data/articles/
-                       (3 articles — train-llm-from-scratch.md is densely
-                       headed end to end, the other two have partial or no
-                       structure) and data/videos/ (4 YouTube transcripts,
-                       auto-generated captions). The original
-                       LESSONS-ai-native-sdlc-playbook.md fixture was
-                       removed without replacement mid-session; see the
-                       "already-structured" note under Step 3 for what
-                       replaced it and what changed about the expectation.
-  eval.md           — gitignored, NOT committed. Local log of eval.py runs
+                       human-readable report to eval.md. No config sweep — it
+                       exists to eyeball prompt/model changes by hand, not to
+                       auto-pick a winner.
+    eval.md         — gitignored, NOT committed. Local log of eval.py runs
                        (model/effort tried, per-heading scores, findings).
-                       Exists only in this checkout, not on a fresh clone —
-                       if you need the history behind a decision in this
-                       plan, check there first, but don't assume it's there.
+                       Exists only in this checkout, not on a fresh clone.
+  docs/
+    decisions.md      — this file
+    system-overview.md — architecture + numbered diagrams
+    youtube.md        — caption sources, prerequisites, frame plan + schema
+    goals.md          — what this is for; what is deliberately not here
+    research.md       — evidence behind the architecture decisions
+  data/             — gitignored: knowledge.db plus verification fixtures.
+                       Current set: data/articles/ (3 articles —
+                       train-llm-from-scratch.md is densely headed end to end,
+                       the other two have partial or no structure). The four
+                       transcript fixtures were discarded in the flatten;
+                       refetch one with youtube.py when grading transcripts.
 ```
+
+`summarizer_agent.py` appears throughout the older sections below. It was
+never built and never will be (decision 7).
 
 ## Considered and deferred
 

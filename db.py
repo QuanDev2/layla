@@ -7,7 +7,7 @@ for its database handle; none of them redefine the schema.
 In: optional db path override (tests use a throwaway file or ":memory:").
 Out: a ready-to-use connection — foreign keys on, Row factory, schema
      present. Never raises for a missing file; sqlite creates it.
-State: creates agents/knowledge/data/ and knowledge.db on first connect.
+State: creates data/ and knowledge.db on first connect.
 """
 
 import sqlite3

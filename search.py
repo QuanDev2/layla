@@ -19,7 +19,7 @@ import sqlite3
 
 import numpy as np
 
-from agents.knowledge import embed as embed_mod
+import embed as embed_mod
 
 RRF_K = 60  # standard dampening constant from the original RRF paper
 POOL_MULTIPLIER = 5  # candidates considered per side before fusing, relative to limit

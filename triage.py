@@ -16,7 +16,7 @@ State: writes to snippets/documents via the caller's connection; does not
 
 from datetime import datetime, timezone
 
-from agents.knowledge import embed as embed_mod
+import embed as embed_mod
 
 _KINDS = ("excerpt", "synthesis", "rejection")
 _STATUSES = ("pending", "kept", "partial", "discarded")

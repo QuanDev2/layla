@@ -1,13 +1,17 @@
-"""YouTube transcript extraction tool.
+"""Fetch a YouTube video's captions and metadata for knowledge capture.
 
-In: video URL (any standard YouTube link form).
-Out: transcript segments with per-line timestamps, plus a timestamped
-     plain-text rendering, via invoke() or CLI stdout as JSON.
-State: with --out-dir, writes <out-dir>/<video_id>/transcript.md.
+video URL -> youtube-transcript-api (fallback: yt-dlp subtitles) -> deduped
+segments -> "[MM:SS] line" text, plus title/channel/duration from yt-dlp.
+
+In: video URL (any standard YouTube link form), optional preferred languages.
+Out: {"ok", "video_id", "url", "title", "channel", "duration", "language",
+     "is_generated", "source", "segment_count", "segments", "text"}; never
+     raises. Metadata is best-effort — captions still return without it.
+State: with --out, writes the transcript text to that path. Nothing else is
+       written; the database is ingest.py's job.
 """
 
 import argparse
-import datetime as dt
 import json
 import re
 import subprocess
@@ -21,9 +25,7 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import YouTubeTranscriptApiException
 
 NAME = "youtube_transcript"
-DESCRIPTION = (
-    "Extract the transcript (with timestamps) of a YouTube video from its URL."
-)
+DESCRIPTION = "Fetch a YouTube video's timestamped captions and metadata."
 INPUT_SCHEMA = {
     "url": {
         "type": "string",
@@ -80,6 +82,65 @@ def _format_timestamp(seconds: float) -> str:
     if hours:
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
+
+
+def _format_duration(seconds) -> str:
+    """Render duration seconds as H:MM:SS or M:SS; empty when unknown."""
+    if not seconds:
+        return ""
+    total = int(seconds)
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def video_metadata(url: str) -> dict:
+    """Read a video's title, channel and duration via yt-dlp.
+
+    In: video URL.
+    Out: {"ok": True, "title", "channel", "duration"} or {"ok": False,
+         "error": str}. Best-effort — captions do not depend on it.
+    """
+    cmd = [
+        "yt-dlp",
+        "--flat-playlist",
+        "--dump-json",
+        "--ignore-no-formats-error",
+        "--no-warnings",
+        url,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        return {"ok": False, "error": "yt-dlp not found on PATH"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "yt-dlp timed out after 120s"}
+
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        return {
+            "ok": True,
+            "title": item.get("title") or "",
+            # per-entry channel is absent on channel pages; the playlist
+            # owner is populated there instead
+            "channel": (
+                item.get("channel")
+                or item.get("uploader")
+                or item.get("playlist_channel")
+                or item.get("playlist_uploader")
+                or ""
+            ),
+            "duration": _format_duration(item.get("duration")),
+        }
+    return {"ok": False, "error": (proc.stderr.strip() or "yt-dlp returned no metadata")}
 
 
 def _dedupe_segments(segments: list) -> list:
@@ -248,9 +309,12 @@ def invoke(url: str, languages: Optional[list] = None, **_kwargs) -> dict:
     which survives the IP blocks that hit the transcript API.
 
     In: url, optional preferred languages (default ["en"]).
-    Out: dict with ok flag; on success: video_id, language, language_code,
-         is_generated, source, segments ([{start, duration, timestamp, text}]),
-         and text (segments joined as "[MM:SS] line" per line).
+    Out: dict with ok flag; on success: video_id, url, title, channel,
+         duration, language, language_code, is_generated, source,
+         segment_count, segments ([{start, duration, timestamp, text}]),
+         and text (segments joined as "[MM:SS] line" per line). Metadata
+         is best-effort: a yt-dlp failure leaves title/channel/duration
+         empty and records metadata_error, never failing the fetch.
     """
     try:
         video_id = extract_video_id(url)
@@ -302,14 +366,20 @@ def invoke(url: str, languages: Optional[list] = None, **_kwargs) -> dict:
     # both sources emit repeated cues; one dedupe policy covers each
     segments = _dedupe_segments(segments)
     text = "\n".join(f"[{s['timestamp']}] {s['text']}" for s in segments)
+    meta_result = video_metadata(url)
     result = {
         "ok": True,
         "video_id": video_id,
         "url": url,
+        "title": meta_result.get("title", ""),
+        "channel": meta_result.get("channel", ""),
+        "duration": meta_result.get("duration", ""),
         **meta,
-        # survives the --out-dir stdout trim, so callers still see the size
+        # survives the --out stdout trim, so callers still see the size
         "segment_count": len(segments),
     }
+    if not meta_result.get("ok"):
+        result["metadata_error"] = meta_result.get("error", "unknown failure")
     if errors:
         result["fallback_from"] = errors
     result["segments"] = segments
@@ -317,32 +387,18 @@ def invoke(url: str, languages: Optional[list] = None, **_kwargs) -> dict:
     return result
 
 
-def write_transcript(result: dict, out_dir: str) -> str:
-    """Write transcript.md for a fetched result.
+def write_text(result: dict, path: str) -> str:
+    """Write the transcript body to a file for capture.
 
-    In: successful invoke() result, output root.
+    In: successful invoke() result, destination path.
     Out: path written.
-    State: creates <out_dir>/<video_id>/transcript.md.
+    State: creates parent directories; writes "[MM:SS] line" text only —
+           title/channel/url belong in the documents row, not the file.
     """
-    video_dir = Path(out_dir) / result["video_id"]
-    video_dir.mkdir(parents=True, exist_ok=True)
-    path = video_dir / "transcript.md"
-
-    frontmatter = "\n".join(
-        [
-            "---",
-            f"video_id: {result['video_id']}",
-            f"url: {result['url']}",
-            f"language: {result['language']}",
-            f"language_code: {result['language_code']}",
-            f"is_generated: {str(result['is_generated']).lower()}",
-            f"segments: {len(result['segments'])}",
-            f"fetched: {dt.date.today().isoformat()}",
-            "---",
-        ]
-    )
-    path.write_text(f"{frontmatter}\n\n{result['text']}\n", encoding="utf-8")
-    return str(path)
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(result["text"] + "\n", encoding="utf-8")
+    return str(out)
 
 
 def main() -> int:
@@ -354,8 +410,8 @@ def main() -> int:
         default=None,
     )
     parser.add_argument(
-        "--out-dir",
-        help="Write <out-dir>/<video_id>/transcript.md instead of only stdout",
+        "--out",
+        help="Write the transcript text to this path; stdout then omits the bulk",
         default=None,
     )
     args = parser.parse_args()
@@ -363,8 +419,8 @@ def main() -> int:
     languages = args.languages.split(",") if args.languages else None
     result = invoke(url=args.url, languages=languages)
 
-    if result.get("ok") and args.out_dir:
-        result["transcript_path"] = write_transcript(result, args.out_dir)
+    if result.get("ok") and args.out:
+        result["transcript_path"] = write_text(result, args.out)
 
     # stdout stays machine-readable; drop bulk text when it is already on disk
     if result.get("transcript_path"):

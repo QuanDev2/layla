@@ -3,4 +3,4 @@ youtube-transcript-api==1.2.4
 numpy==2.0.2
 
 # System binaries are NOT listed here — they are not pip-managed.
-# See "Prerequisites" in SPEC.md: yt-dlp (required), ffmpeg (frames, planned).
+# See "Prerequisites" in docs/youtube.md: yt-dlp (required), ffmpeg (frames, planned).

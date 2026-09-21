@@ -13,14 +13,14 @@ document -> segment_units() -> heading_agent.insert_headings() -> points
          -> appended section in eval.md
 
 No config sweep — this is a single-shot manual tuning loop, not
-agents/youtube/PLAN.md's planned candidate-comparison eval.py shape. To try a
+a candidate-comparison sweep. To try a
 different model or effort, edit heading_agent.DEFAULT_MODEL / DEFAULT_EFFORT
 (or judge's) by hand and rerun.
 
 In: none — test set and model/effort come from module state.
 Out: {"ok": True, "run_id": str, "rows": [...], "average_score": float|None}.
-State: appends to agents/knowledge/eval.md and writes
-       agents/knowledge/eval_runs/<run_id>/*.md — both gitignored, dev
+State: appends to dev/eval.md and writes
+       dev/eval_runs/<run_id>/*.md — both gitignored, dev
        scratch, not source. heading_agent.py and judge.py remain this
        domain's only production modules.
 """
@@ -31,16 +31,18 @@ import re
 import sys
 from pathlib import Path
 
-from agents.knowledge import heading_agent, judge
-from agents.knowledge.chunk import MAX_CHARS, segment_units
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import heading_agent  # noqa: E402
+import judge  # noqa: E402
+from chunker import MAX_CHARS, segment_units  # noqa: E402
+
+# Transcript fixtures were discarded in the 2026-09-20 flatten; refetch one
+# with `python3 youtube.py <url>` and add it here when grading transcripts.
 TEST_DOCS = [
-    {"path": "agents/knowledge/data/videos/XvmixEXPT3Q/transcript.md", "kind": "transcript"},
-    {"path": "agents/knowledge/data/videos/kVXp6UNVPTo/transcript.md", "kind": "transcript"},
-    {"path": "agents/knowledge/data/videos/4biXYSNkn9Y/transcript.md", "kind": "transcript"},
-    {"path": "agents/knowledge/data/videos/IMLwvK08JVc/transcript.md", "kind": "transcript"},
-    {"path": "agents/knowledge/data/articles/graph-engineering-2026-guide-openclaw-codex.md", "kind": "article"},
-    {"path": "agents/knowledge/data/articles/3-years-of-graph-engineering-with-langgraph.md", "kind": "article"},
+    {"path": "data/articles/graph-engineering-2026-guide-openclaw-codex.md", "kind": "article"},
+    {"path": "data/articles/3-years-of-graph-engineering-with-langgraph.md", "kind": "article"},
+    {"path": "data/articles/train-llm-from-scratch.md", "kind": "article"},
 ]
 
 _HERE = Path(__file__).resolve().parent
@@ -168,7 +170,7 @@ def score_document(doc: dict, run_id: str) -> dict:
 
     Out: {"path", "kind", "ok", ["error"] | ["headings_inserted", "structural",
           "judge_ok", "scores", "doc_average"], "section_md"}.
-    State: writes agents/knowledge/eval_runs/<run_id>/<slug>.md on success.
+    State: writes dev/eval_runs/<run_id>/<slug>.md on success.
     """
     path, kind = doc["path"], doc["kind"]
     text = Path(path).read_text()

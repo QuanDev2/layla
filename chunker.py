@@ -557,7 +557,7 @@ def _resolve_points(units: list, source_kind: str, use_llm: bool) -> tuple:
         return [], "fallback"
 
     # Local import: heading_agent imports segment_units from this module.
-    from agents.knowledge.heading_agent import insert_headings
+    from heading_agent import insert_headings
 
     result = insert_headings(units, source_kind)
     if not result.get("ok"):

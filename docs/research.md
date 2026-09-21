@@ -245,8 +245,8 @@ sources were read, already matches this pattern:
 | Role | Layla's instance |
 |---|---|
 | Orchestrator (no tools, delegation only) | Layla, reading domain `AGENTS.md` |
-| Specialist (narrow capability, forced-deterministic shape) | `agents/youtube/agent.py` (planned) |
-| Evaluator (deterministic Judge) | `agents/youtube/verify.py` (planned) |
+| Specialist (narrow capability, forced-deterministic shape) | `youtube.py` (built; the summarizer subagent was cut — decision 21) |
+| Evaluator (deterministic Judge) | `dev/judge.py` (built, offline only — decision 20) |
 | Loop-until-pass (deterministic glue) | Retry loop inside `ingest.py` (planned) |
 | Sequential pipeline (deterministic glue) | `ingest.py`: playlist → diff → per-video → index (planned) |
 
