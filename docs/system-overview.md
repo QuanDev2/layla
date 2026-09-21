@@ -12,19 +12,21 @@ Diagram boxes are numbered so they can be referenced by number.
 
 ## 1. The shape of the system
 
-You and Layla hold the conversation; nine plain Python modules hold the
+You and Layla hold the conversation; eleven plain Python modules hold the
 plumbing; one SQLite file holds everything permanent. Nothing runs on its
 own — every module is a library call Layla makes during a conversation, and
-text only becomes searchable when you say so. Articles, pasted text, and
+nothing is stored without your explicit yes. Articles, pasted text, and
 YouTube videos all enter through the same path; a video is just a document
 with `source_type='transcript'`.
 
-Three stages: **capture → triage → retrieve**, with a chunker hanging off the
-middle.
+Two kinds of memory, deliberately separate:
 
-- Capture puts text into `documents` unchanged.
-- Triage decides what is worth keeping; only that lands in `snippets`.
-- Retrieval reads `snippets` and never touches the archive.
+- **Learned material** — capture → triage → retrieve, with a chunker hanging
+  off the middle. `documents` holds the archive unchanged, `snippets` holds
+  only what you chose to keep, and retrieval ranks by relevance.
+- **Personal memory** — `entities` and `observations`. What you tell Layla
+  about people and things in your life, retrieved by exact lookup rather than
+  ranked search, because a confidently wrong shoe size is worse than none.
 
 ---
 
@@ -124,6 +126,41 @@ flowchart TD
 - **Box 16 never reads `raw_text`.** A chunk you discarded leaves a gap, so
   discarded material can never leak back through neighbor expansion.
 
+## 4b. Personal memory flow
+
+A second, separate path. Not a search — a lookup.
+
+```mermaid
+flowchart TD
+    P1["1. Remember: mom wears size 8"] --> P2["2. entities.resolve('mom')"]
+    P2 --> P3{"3. How many matches?"}
+    P3 -->|one| P4["4. Name it back: Nora, your mother"]
+    P3 -->|several| P5["5. Ask which one — never guess"]
+    P3 -->|none| P6["6. Propose entities.create(), show the row"]
+    P5 --> P4
+    P6 --> P4
+    P4 --> P7{"7. Structured or prose?"}
+    P7 -->|clean key| P8["8. observations.write(attribute, value)"]
+    P7 -->|no clean key| P9["9. observations.write(body=...)"]
+    P7 -->|value changed| P10["10. observations.replace(): supersede, then write"]
+    P8 --> P11[("11. observations")]
+    P9 --> P11
+    P10 --> P11
+    P12["12. What is mom's shoe size?"] --> P13["13. resolve, then observations.get()"]
+    P13 --> P11
+    P13 --> P14["14. Report value + when observed, or say nothing is stored"]
+```
+
+- **Box 3 is the whole design.** Aliases resolve "mom"/"mum"/"Nora" to one
+  row; anything ambiguous is a question, never a guess, because a silently
+  created duplicate fragments the data permanently.
+- **Box 10 exists so a lookup can never return two answers.** Values are
+  superseded, never overwritten — history stays readable, only one row is
+  active.
+- **Box 14 fails loudly.** An empty result is reported as empty. This path
+  never ranks, never approximates, and never borrows a similar entity's
+  value.
+
 ---
 
 ## 5. Module map
@@ -138,6 +175,8 @@ flowchart TD
 | `triage.py` | Writes `snippets`, batch-embeds them. The only write path into the corpus. | Layla |
 | `embed.py` | Voyage `voyage-4`, float32 blob codec, `.env` key loading. | `triage.py`, `search.py` |
 | `search.py` | BM25 + cosine, fused by RRF, neighbor expansion, source metadata. | Layla |
+| `entities.py` | Registry of people and things; alias resolution. | Layla |
+| `observations.py` | Exact-lookup store for what the user tells Layla about an entity. | Layla |
 | `dev/judge.py`, `dev/eval.py` | Offline grading of heading quality. Dev-only. | nothing in the workflow |
 
 ---

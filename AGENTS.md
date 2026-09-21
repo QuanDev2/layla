@@ -27,9 +27,17 @@ never re-litigate its decisions. Architecture and data flow at a glance:
 | `triage.write_chunks(conn, document_id, chunks, tags=None)` | Store every chunk from a "keep the whole document" call; takes chunker.py's `chunks` list, one batched embed |
 | `triage.set_status(conn, document_id, status)` / `discard_document(conn, document_id)` | Close the document out: `kept` / `partial` / `discarded` |
 | `search.search(conn, query, terms=[...], limit=10)` | Hybrid keyword + meaning search over snippets, fused ranking, neighbor context, source metadata attached |
+| `entities.resolve(conn, text)` | Find which entity the user's words mean. Zero matches = new, more than one = ask which, never guess |
+| `entities.create(conn, name, kind, relation=None, full_name=None, aliases=None, note=None)` | Register a person or thing. Returns the existing id with `duplicate: True` when the name or an alias already resolves |
+| `entities.add_alias(conn, entity_id, alias)` / `get` / `list_all(conn, kind=None)` | Teach another word for an entity; read one; list them |
+| `observations.write(conn, entity_id, attribute=None, value=None, body=None, source=None)` | Record something about an entity: `attribute`+`value` when structured, `body` for prose |
+| `observations.replace(conn, entity_id, attribute, value, source=None)` | Update a structured value — supersedes the old rows, writes the new one |
+| `observations.get(conn, entity_id, attribute=None, include_superseded=False)` | Exact lookup, newest first. Empty means nothing is stored — say so, never infer |
+| `observations.supersede(conn, observation_id)` | Retire one observation without replacing it |
 
 `source_type`: `url` | `pasted` | `file` | `transcript`. Snippet `kind`:
-`excerpt` | `synthesis` | `rejection`.
+`excerpt` | `synthesis` | `rejection`. Entity `kind`: `self` | `person` |
+`pet` | `vehicle` | `place` | `org` | `thing`.
 
 ## Invocation pattern
 
@@ -140,6 +148,48 @@ confirmation, then write. Never auto-select text.
   say so; don't guess around it.
 - A hit with `kind: rejection` is a recorded disagreement — never read it back
   as an endorsement.
+
+## Workflow: remember something about the user's life
+
+Personal memory lives in `entities` + `observations`, never in `snippets`.
+A shoe size, a family member's preference, something said on a phone call:
+these have no source document, they change over time, and they are looked up
+by who they are about rather than searched by topic.
+
+When the user says "remember that…":
+
+1. **Resolve the subject.** `entities.resolve(conn, "mom")`. One match: use
+   it and name it back ("storing under Nora, your mother"). Several matches:
+   ask which one — never pick. Zero matches: the entity is new, so propose
+   creating it and show the row first.
+2. **Pronouns are not aliases.** "him" resolves from the conversation, not
+   the table. If the last few turns are ambiguous, ask: "your brother Tomas
+   or your dad?"
+3. **Pick the shape.** A clean key-value ("shoe size is 8") is
+   `attribute='shoe_size', value='US 8 womens'`. Anything that resists a key
+   ("she's thinking about moving next spring") goes in `body`.
+4. **Show the exact row, then write.** Same rule as triage: propose, show,
+   wait. Record where it came from in `source`.
+5. **Changing a value uses `replace`, never a second `write`.** Two active
+   rows for one attribute is a contradiction the lookup cannot resolve.
+
+When the user asks "what's X's Y":
+
+- `entities.resolve` then `observations.get`. Report the value and when it
+  was observed. An empty result means nothing is stored — say exactly that.
+  Never infer a value from a similar entity; a confident wrong answer here is
+  worse than none.
+- Standing preferences are observations about the `self` entity, so "what are
+  my preferred brands" is the same lookup.
+
+Routing between this and search: an assertion about a person or thing is a
+write here; a question asking for a specific value is a lookup here; a
+question asking what was learned about a topic is `search.search`. When it is
+genuinely ambiguous, ask in one line rather than guessing.
+
+Privacy: this repository is public. Real names and real observations live only
+in `data/knowledge.db`, which is gitignored. Never put them in docs, examples,
+commit messages, or test fixtures — invented people only.
 
 ## Credentials
 

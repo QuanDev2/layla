@@ -65,6 +65,37 @@ CREATE TRIGGER IF NOT EXISTS snippets_au AFTER UPDATE ON snippets BEGIN
     INSERT INTO snippets_fts(rowid, content, tags)
     VALUES (new.id, new.content, new.tags);
 END;
+
+-- entities: people and things the user says something about. `name` is the
+-- canonical label, `aliases` is every word the user actually uses for it, so
+-- "mom"/"mum"/"Linda" resolve to one row instead of fragmenting (decision 23).
+CREATE TABLE IF NOT EXISTS entities (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL,      -- 'self' | 'person' | 'pet' | 'vehicle' | 'place' | 'org' | 'thing'
+    relation    TEXT,               -- 'mother', 'girlfriend'; NULL for objects
+    full_name   TEXT,
+    aliases     TEXT,               -- comma-separated
+    note        TEXT,
+    created_at  TEXT NOT NULL
+);
+
+-- observations: anything worth remembering about an entity. Structured rows
+-- carry attribute+value and are looked up exactly; prose rows carry body.
+-- Never edited in place — superseded, so history survives without competing.
+CREATE TABLE IF NOT EXISTS observations (
+    id          INTEGER PRIMARY KEY,
+    entity_id   INTEGER NOT NULL REFERENCES entities(id),
+    attribute   TEXT,               -- 'shoe_size'; NULL for prose
+    value       TEXT,               -- required when attribute is set
+    body        TEXT,               -- required when attribute is NULL
+    source      TEXT,               -- 'phone call, 2026-09-21'
+    observed_at TEXT NOT NULL,
+    superseded  INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS observations_entity
+    ON observations(entity_id, attribute, superseded);
 """
 
 

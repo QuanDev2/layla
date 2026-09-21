@@ -45,7 +45,7 @@ touching a module, not this file.
 
 | Path | Does |
 |---|---|
-| `db.py` | Schema (`documents`, `snippets`, `snippets_fts`) + connection helper; FTS5 kept in sync by triggers |
+| `db.py` | Schema (`documents`, `snippets`, `snippets_fts`, `entities`, `observations`) + connection helper; FTS5 kept in sync by triggers |
 | `ingest.py` | Captures already-fetched text into a `documents` row, dedupes by URL |
 | `chunker.py` | Segments a document, proposes headings via a pluggable LLM backend, splits into ~1,800-char chunks with context prefixes |
 | `heading_agent.py` | The heading-proposal call chunker.py wraps (omp \| anthropic \| off) |
@@ -53,6 +53,8 @@ touching a module, not this file.
 | `embed.py` | Voyage AI (`voyage-4`), float32 blob codec, `.env` loader |
 | `search.py` | Hybrid FTS5 + cosine, fused by RRF, neighbor expansion; takes caller-extracted `terms` |
 | `youtube.py` | Captions with two-source fallback + title/channel/duration via yt-dlp |
+| `entities.py` | Registry of people/things with alias resolution; `resolve` returns candidates, never picks |
+| `observations.py` | Exact-lookup personal memory: structured `attribute`/`value` or prose `body`, superseded rather than overwritten |
 | `dev/judge.py`, `dev/eval.py` | Dev-only heading grading harness; nothing in the workflow calls them |
 
 ## Key decisions worth knowing before touching this
@@ -82,12 +84,29 @@ chars shorter than pre-fix; and a full video round-trip ran end to end —
 `youtube.py` fetched real captions plus title/channel, capture → chunk →
 `write_chunks` embedded 1/1, and the snippet came back through hybrid search.
 
+Personal memory (2026-09-21) smoke-tested against invented people in an
+in-memory database: alias resolution ("mom" → Nora), duplicate detection on
+create, ambiguity returning multiple candidates, structured and prose writes,
+both validation failures, `replace` superseding exactly one row, history
+readable with `include_superseded`, and an empty lookup returning zero rather
+than a guess. Schema applied to the live database — 2 documents and 13
+snippets intact, existing hybrid search unaffected. Not yet exercised in a
+real conversation.
+
 ## Next steps
 
-- None outstanding. Frame extraction is the only designed-but-unbuilt work:
-  plan and proposed schema in `docs/youtube.md`.
+- Personal memory is built but untested in real use — the user will exercise
+  it and report back before any changes.
+- Frame extraction remains designed-but-unbuilt: plan and proposed schema in
+  `docs/youtube.md`.
 
 ## Open questions
 
+- How prose observations get searched. Structured lookups need no search;
+  prose rows will eventually want FTS or embeddings, which reopens the
+  second-ranked-index question. Deferred until there are real rows.
 - Whether a frame's snippet stores OCR text verbatim, and whether frames get
   their own `chunk_index` ordering or stay `NULL` like syntheses.
+- Whether every numbered decision in `docs/decisions.md` should carry a short
+  title, so citations read "decision 13 (documents and snippets have distinct
+  roles)" rather than a bare number.

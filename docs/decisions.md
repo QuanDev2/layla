@@ -215,6 +215,63 @@ decision log that edits its own history is worthless.
     frame is found through its LLM description, stored as a snippet with
     `kind='frame'` and `asset_id`. Full shape and the two still-open options
     (OCR text, ordering) in `docs/youtube.md`.
+23. **Personal memory is `entities` + `observations`, exact-lookup, same
+    agent, same database.** Decided 2026-09-21. Facts about the user's life
+    — a family member's shoe size, a standing preference, something said on
+    a phone call — are not document-derived knowledge and do not belong in
+    `snippets`: they have no source document (`snippets.document_id` is NOT
+    NULL), they change over time, and they are keyed by an entity rather
+    than by topic.
+    **Why a second store rather than a second index.** The query shapes
+    genuinely differ. `search.py` is a *ranker*: it returns relevant
+    material to reason over, and an imperfect result is still useful.
+    "What is Nora's shoe size" is a *lookup*: a confidently wrong neighbor
+    is worse than nothing, and "Nora wears 8" / "Tomas wears 10" embed
+    almost identically, so RRF would happily rank them adjacent. Layla
+    routes by question shape, the same way she already decides which content
+    words to pass as `terms`.
+    **Naming.** `entities` over `subjects`/`things` — it is the word every
+    future reader recognizes, and the table is a registry of things you can
+    say something about. `observations` over `facts` — half of what gets
+    stored is not a fact but something someone said, true *as of* when it
+    was said, which is exactly the staleness semantics a shoe size needs.
+    **Shape.** `entities(name, kind, relation, full_name, aliases, note)`:
+    `name` is the canonical label, `aliases` is every word the user actually
+    uses, because "mom"/"mum"/"Linda" must resolve to one row or the data
+    fragments silently. Identity fields are deliberately minimal and mostly
+    nullable — demanding a last name for a cousin you only ever call "my
+    cousin" creates friction at the moment of writing, which is the moment
+    that must stay cheap. `observations(entity_id, attribute, value, body,
+    source, observed_at, superseded)`: nullable `attribute` is the trick
+    that lets structured rows (exactly queryable) and prose rows (no clean
+    key) share one table and one supersede rule.
+    **Never edited in place.** A changed value supersedes the old row rather
+    than overwriting it, so history survives and a lookup can never return
+    two contradictory values. Same reasoning as decision 19's polarity
+    argument: correctness must be structural, not a matter of reading care.
+    **Preferences are not a special case.** The user is entity `kind='self'`;
+    a standing preference is an observation about them, with `source` citing
+    the document that produced it.
+    **Rejected: a graph database.** A graph pays for itself on multi-hop
+    traversal over typed edges; these are one-hop attribute lookups over
+    tens of rows. `entity → attribute → value` *is* a triple, stored as
+    rows, without a second engine, a second query language, or an extraction
+    step to keep in sync. Consistent with decision 8's rejection of
+    automatic entity extraction. Revisit if intersection queries across many
+    entities ever become routine — and even then, a three-way join in SQLite
+    comes first.
+    **Rejected: a separate domain or subagent.** Decision 21 killed the
+    domain layer one day earlier; re-adding it for the second feature would
+    re-litigate it with no new evidence. Subagents exist to keep bulk text
+    out of the conversation and to do work that needs no conversation —
+    an observation is twenty characters, and resolving "him" to an entity
+    requires the live conversation. Two new modules, not a new agent. If
+    `AGENTS.md` outgrows comfort, split the *instructions* into an on-demand
+    file, never the agent.
+    **Left open deliberately.** How prose observations get searched. A
+    structured lookup needs no search at all; prose rows will eventually
+    want FTS or embeddings, which reopens the second-ranked-index question.
+    Thirty real rows will answer it better than a guess made at zero.
 
 ## Schema (built; see db.py)
 
@@ -245,6 +302,28 @@ CREATE TABLE snippets (
 
 CREATE VIRTUAL TABLE snippets_fts USING fts5(
   content, tags, content='snippets', content_rowid='id'
+);
+
+CREATE TABLE entities (                     -- decision 23
+  id          INTEGER PRIMARY KEY,
+  name        TEXT NOT NULL,                -- canonical label
+  kind        TEXT NOT NULL,                -- 'self' | 'person' | 'pet' | 'vehicle' | 'place' | 'org' | 'thing'
+  relation    TEXT,                         -- 'mother', 'brother'; NULL for objects
+  full_name   TEXT,
+  aliases     TEXT,                         -- comma-separated: every word the user uses
+  note        TEXT,
+  created_at  TEXT NOT NULL
+);
+
+CREATE TABLE observations (                 -- decision 23
+  id          INTEGER PRIMARY KEY,
+  entity_id   INTEGER NOT NULL REFERENCES entities(id),
+  attribute   TEXT,                         -- 'shoe_size'; NULL for prose
+  value       TEXT,                         -- required when attribute is set
+  body        TEXT,                         -- required when attribute is NULL
+  source      TEXT,
+  observed_at TEXT NOT NULL,
+  superseded  INTEGER NOT NULL DEFAULT 0
 );
 ```
 
