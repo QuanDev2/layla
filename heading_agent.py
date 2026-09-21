@@ -90,6 +90,27 @@ _TRANSCRIPT_ADDENDUM = (
     "where the speaker moves to a new subject."
 )
 
+_CHAPTER_PREAMBLE = """# Fixed chapter boundaries
+
+The creator already divided this video into chapters, listed below. Those
+boundaries are fixed and already applied — you never propose one, move one, or
+write a heading that spans two of them.
+
+Your job inside that structure:
+- Every chapter gets exactly one heading at its own first block, listed below
+  as "heading required at block N". Every one of those blocks must appear in
+  your array — a chapter with no heading is a failed answer.
+- The creator's chapter title names a subject ("Fabric Quality"); yours states
+  what the section actually argues ("Natural fibers outlast synthetics in a
+  wardrobe"). Both are kept, so never repeat the chapter title back.
+- A chapter marked LONG runs past the chunk target. Give it extra headings at
+  real topic changes inside it, enough that no stretch between two of your
+  headings exceeds ~1800 characters.
+- A chapter not marked LONG gets its one required heading and nothing more.
+- Propose no heading at a block outside the ranges listed below.
+
+Chapters, with inclusive block ranges:"""
+
 
 def render_units(units: list) -> str:
     """Render the numbered blocks the heading model sees.
@@ -103,15 +124,46 @@ def render_units(units: list) -> str:
     return "\n\n".join(f"[{u['index']}] {u['text']}" for u in units)
 
 
-def build_system_prompt(source_kind: str, feedback: Optional[str] = None) -> str:
+def render_chapters(chapters: list) -> str:
+    """Render the fixed chapter list the model must work inside.
+
+    In: [{"title", "first_unit", "last_unit", "chars", "long"}].
+    Out: the chapter preamble plus one line per chapter. Empty string for
+         an empty list, so a chapterless video adds nothing to the prompt.
+    """
+    if not chapters:
+        return ""
+    lines = [_CHAPTER_PREAMBLE]
+    required = []
+    for chapter in chapters:
+        required.append(str(chapter["first_unit"]))
+        lines.append(
+            f"- \"{chapter['title']}\" — blocks {chapter['first_unit']}"
+            f"–{chapter['last_unit']}, {chapter['chars']:,} chars"
+            + (" LONG" if chapter.get("long") else "")
+            + f" → heading required at block {chapter['first_unit']}"
+        )
+    lines.append(
+        f"\nYour array holds at least {len(required)} elements, one at each of "
+        f"blocks {', '.join(required)}, plus any extra headings the LONG "
+        f"chapters need."
+    )
+    return "\n".join(lines)
+
+
+def build_system_prompt(source_kind: str, feedback: Optional[str] = None,
+                        chapters: Optional[list] = None) -> str:
     """Build the heading-insertion system prompt.
 
-    In: "article" | "transcript", optional retry feedback.
+    In: "article" | "transcript", optional retry feedback, optional fixed
+        chapters.
     Out: prompt string. Pure, no side effects.
     """
     sections = [_BASE_PROMPT]
     if source_kind == "transcript":
         sections.append(_TRANSCRIPT_ADDENDUM)
+    if chapters:
+        sections.append(render_chapters(chapters))
     if feedback:
         sections.append(
             "# Previous attempt failed\n" + feedback
@@ -191,12 +243,13 @@ def _insert_headings_anthropic(prompt: str, rendered: str) -> dict:
 
 
 def insert_headings(units: list, source_kind: str, model: str = DEFAULT_MODEL,
-                     effort: str = DEFAULT_EFFORT, feedback: Optional[str] = None) -> dict:
+                     effort: str = DEFAULT_EFFORT, feedback: Optional[str] = None,
+                     chapters: Optional[list] = None) -> dict:
     """Propose heading insertion points for a segmented document.
 
     In: units from segment_units() (caller owns segmentation), source_kind
         ("article" | "transcript"), model/effort (omp backend only), optional
-        retry feedback.
+        retry feedback, optional fixed chapters the headings must nest inside.
     Out: see module docstring. Backend chosen from KNOWLEDGE_LLM env var,
          default "omp"; "off" and unrecognized values fail without a call.
     """
@@ -206,7 +259,7 @@ def insert_headings(units: list, source_kind: str, model: str = DEFAULT_MODEL,
     if backend not in _KNOWN_BACKENDS:
         return {"ok": False, "error": f"unknown KNOWLEDGE_LLM backend: {backend}", "backend": backend}
 
-    prompt = build_system_prompt(source_kind, feedback)
+    prompt = build_system_prompt(source_kind, feedback, chapters)
     rendered = render_units(units)
 
     if backend == "anthropic":

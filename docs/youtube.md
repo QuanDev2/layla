@@ -66,7 +66,39 @@ empty. The chunk prefix then degrades to `[00:00–02:00] > Section`.
 
 ---
 
-## 3. What was deliberately dropped
+## 3. Chapters as chunk boundaries
+
+`video_chapters()` reads the creator's published chapters through a second
+`yt-dlp --skip-download --dump-json --playlist-items 1` call. `--flat-playlist`
+cannot serve here: it omits `chapters` entirely, which is why metadata and
+chapters are two calls rather than one. `invoke()` returns them as
+`chapters: [{title, start, end}]`, seconds, empty when the creator published
+none, with `chapters_error` set if yt-dlp failed.
+
+`chunker.chunk_transcript(..., chapters=[...])` then splits on them:
+
+- **Chapter starts are fixed level-2 points.** Each maps to the first caption
+  segment at or after its `start_time`, so a boundary never lands mid-segment.
+  The heading model cannot move, merge, or replace one.
+- **The model's only jobs are naming and subdividing.** It writes one level-3
+  subheading at every chapter's first block, and extra ones inside a chapter
+  whose body exceeds `TARGET_CHARS`. A creator's "Button test" becomes
+  `Button test > Metal buttons outlast plastic ones` — a subject label plus a
+  retrievable claim.
+- **Compliance is checked, not hoped for.** `_chapter_complaints()` names every
+  chapter left unlabeled or every long chapter left undivided; the message
+  feeds the existing single retry.
+- **Degradation is stepwise.** Model unusable → chapters alone carry the split
+  (`backend: chapters`). No chapters → today's whole-document heading pass,
+  unchanged.
+
+Prefix and backend label say which path ran: `chapters+omp` for the full path,
+`chapters` for chapter-only, `omp`/`fallback` for a chapterless video.
+
+---
+
+
+## 4. What was deliberately dropped
 
 The repo previously carried a YouTube "domain" with playlist ingest, per-video
 summarizer subagents, a markdown store under `data/videos/`, and an `INDEX.md`
@@ -85,7 +117,7 @@ against real videos, not by review.
 
 ---
 
-## 4. Frames — designed, not built
+## 5. Frames — designed, not built
 
 Screenshots are a future goal: slides, charts, and diagrams a transcript cannot
 convey. Nothing below is implemented.
@@ -198,7 +230,7 @@ Why this and not an image column or a parallel search path:
   already carry `start`/`end` stamps, so "show me the slide he was on at 14:22"
   is a range query, not string matching.
 
-## 5. Open options — decide when frames are actually built
+## 6. Open options — decide when frames are actually built
 
 Both of these are recorded as options, not decisions. Neither should be
 settled on paper; settle them against real extracted frames.

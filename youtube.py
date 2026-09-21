@@ -143,6 +143,49 @@ def video_metadata(url: str) -> dict:
     return {"ok": False, "error": (proc.stderr.strip() or "yt-dlp returned no metadata")}
 
 
+def video_chapters(url: str) -> dict:
+    """Read a video's published chapters via yt-dlp.
+
+    In: video URL.
+    Out: {"ok": True, "chapters": [{"title", "start", "end"}]} with times
+         in seconds; an empty list means the creator published none.
+         {"ok": False, "error": str} when yt-dlp is missing or fails.
+    """
+    cmd = [
+        "yt-dlp",
+        "--skip-download",
+        "--dump-json",
+        "--playlist-items", "1",
+        "--no-warnings",
+        url,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        return {"ok": False, "error": "yt-dlp not found on PATH"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "yt-dlp timed out after 120s"}
+
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        chapters = []
+        for chapter in item.get("chapters") or []:
+            title = str(chapter.get("title") or "").strip()
+            start = chapter.get("start_time")
+            if not title or start is None:
+                continue
+            chapters.append({"title": title, "start": float(start),
+                             "end": chapter.get("end_time")})
+        return {"ok": True, "chapters": chapters}
+    return {"ok": False, "error": (proc.stderr.strip() or "yt-dlp returned no metadata")}
+
+
 def _dedupe_segments(segments: list) -> list:
     """Collapse repeated caption text into single segments.
 
@@ -310,11 +353,12 @@ def invoke(url: str, languages: Optional[list] = None, **_kwargs) -> dict:
 
     In: url, optional preferred languages (default ["en"]).
     Out: dict with ok flag; on success: video_id, url, title, channel,
-         duration, language, language_code, is_generated, source,
-         segment_count, segments ([{start, duration, timestamp, text}]),
-         and text (segments joined as "[MM:SS] line" per line). Metadata
-         is best-effort: a yt-dlp failure leaves title/channel/duration
-         empty and records metadata_error, never failing the fetch.
+         duration, chapters, language, language_code, is_generated,
+         source, segment_count, segments ([{start, duration, timestamp,
+         text}]), and text (segments joined as "[MM:SS] line" per line).
+         Metadata is best-effort: a yt-dlp failure leaves title/channel/
+         duration empty and chapters absent, records metadata_error, and
+         never fails the fetch.
     """
     try:
         video_id = extract_video_id(url)
@@ -367,6 +411,7 @@ def invoke(url: str, languages: Optional[list] = None, **_kwargs) -> dict:
     segments = _dedupe_segments(segments)
     text = "\n".join(f"[{s['timestamp']}] {s['text']}" for s in segments)
     meta_result = video_metadata(url)
+    chapter_result = video_chapters(url)
     result = {
         "ok": True,
         "video_id": video_id,
@@ -374,12 +419,15 @@ def invoke(url: str, languages: Optional[list] = None, **_kwargs) -> dict:
         "title": meta_result.get("title", ""),
         "channel": meta_result.get("channel", ""),
         "duration": meta_result.get("duration", ""),
+        "chapters": chapter_result.get("chapters", []),
         **meta,
         # survives the --out stdout trim, so callers still see the size
         "segment_count": len(segments),
     }
     if not meta_result.get("ok"):
         result["metadata_error"] = meta_result.get("error", "unknown failure")
+    if not chapter_result.get("ok"):
+        result["chapters_error"] = chapter_result.get("error", "unknown failure")
     if errors:
         result["fallback_from"] = errors
     result["segments"] = segments

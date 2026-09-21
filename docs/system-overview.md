@@ -34,7 +34,7 @@ Two kinds of memory, deliberately separate:
 
 ```mermaid
 flowchart TD
-    A0["0. A YouTube URL"] --> A0b["0b. youtube.py: captions + title/channel"]
+    A0["0. A YouTube URL"] --> A0b["0b. youtube.py: captions + title/channel + chapters"]
     A0b --> A2
     A1["1. You paste text or a link"] --> A2["2. Layla reads it, gives the gist"]
     A2 --> A3["3. ingest.capture()"]
@@ -84,6 +84,16 @@ flowchart LR
   duplicates. Heading *quality* is never graded here — see section 6.
 - Box 6 drops the document's own H1 when a title was supplied; both fill the
   title slot, and repeating it wastes prefix chars in every embedded chunk.
+
+### A video with published chapters
+
+Same five steps, different authority over box 2. `chapter_points()` turns the
+creator's chapters into fixed level-2 boundaries first; the model then runs
+with those boundaries in its prompt and may only add level-3 subheadings —
+one per chapter, plus extra splits inside any chapter over `TARGET_CHARS`.
+`_chapter_complaints()` checks that contract and feeds the existing retry.
+Boundaries are the creator's, headings are the model's, and neither is the
+agent's. `docs/youtube.md` section 3 holds the detail.
 
 ---
 
@@ -169,9 +179,9 @@ flowchart TD
 |---|---|---|
 | `db.py` | Schema + connection helper. Applies schema on first connect. | every module |
 | `ingest.py` | Writes the `documents` row. Never fetches, never calls an LLM. | Layla |
-| `chunker.py` | Splits a document into ~1,800-char candidate chunks with context prefixes. CLI. | Layla |
-| `heading_agent.py` | Proposes heading insertion points for unstructured text. | `chunker.py` only |
-| `youtube.py` | Fetches a video's captions (two sources, fallback) and its title/channel/duration. CLI. | Layla |
+| `chunker.py` | Splits a document into ~1,800-char candidate chunks with context prefixes; fixes boundaries at a video's chapters when given them. CLI. | Layla |
+| `heading_agent.py` | Proposes heading insertion points for unstructured text, or subheadings inside fixed chapters. | `chunker.py` only |
+| `youtube.py` | Fetches a video's captions (two sources, fallback), its title/channel/duration, and its published chapters. CLI. | Layla |
 | `triage.py` | Writes `snippets`, batch-embeds them. The only write path into the corpus. | Layla |
 | `embed.py` | Voyage `voyage-4`, float32 blob codec, `.env` key loading. | `triage.py`, `search.py` |
 | `search.py` | BM25 + cosine, fused by RRF, neighbor expansion, source metadata. | Layla |

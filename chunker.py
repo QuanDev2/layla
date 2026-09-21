@@ -264,19 +264,21 @@ def _heading_unit(unit: dict) -> "tuple | None":
     return len(m.group(1)), m.group(2).strip()
 
 
-def _oversized_sections(units: list, points: list) -> list:
+def _oversized_sections(units: list, points: list, fixed_points: list = ()) -> list:
     """Name every section still over MAX_CHARS after applying points.
 
-    In: units, accepted points.
+    In: units, accepted points, boundaries the caller already fixed.
     Out: one scoped failure message per oversized section, empty when
-         clean. Boundaries are the document's own headings *and* the
-         inserted points — a section the document already delimits is not
-         reported as the model's failure.
+         clean. Boundaries are the document's own headings, the inserted
+         points, and any fixed points — a section the document or the
+         creator already delimits is not reported as the model's failure.
     """
     if not units:
         return []
     bounds = {0, len(units)}
-    bounds.update(p["before_unit"] for p in points if 0 < p["before_unit"] < len(units))
+    for point in list(points) + list(fixed_points):
+        if 0 < point["before_unit"] < len(units):
+            bounds.add(point["before_unit"])
     bounds.update(u["index"] for u in units if _heading_unit(u) and u["index"] > 0)
     edges = sorted(bounds)
     messages = []
@@ -290,10 +292,13 @@ def _oversized_sections(units: list, points: list) -> list:
     return messages
 
 
-def validate_points(points: list, units: list) -> tuple:
+def validate_points(points: list, units: list, level: int = 2,
+                    fixed_points: list = ()) -> tuple:
     """Repair heading points from the model and report what stayed broken.
 
-    In: raw points from heading_agent, units they address.
+    In: raw points from heading_agent, units they address, the heading
+        level to stamp on every accepted point, boundaries already fixed
+        by the caller (chapters) that the model did not propose.
     Out: (accepted points sorted by before_unit, failure message or None).
          The message names exact offenders — it is fed straight back into
          one retry, so a blanket string is a bug. Drifted anchors are
@@ -340,7 +345,8 @@ def validate_points(points: list, units: list) -> tuple:
                 continue
             index = moved
 
-        kept.append({"before_unit": index, "anchor": anchor, "heading": heading})
+        kept.append({"before_unit": index, "anchor": anchor, "heading": heading,
+                     "level": level})
 
     kept.sort(key=lambda p: p["before_unit"])
     accepted = []
@@ -354,8 +360,23 @@ def validate_points(points: list, units: list) -> tuple:
             continue
         accepted.append(point)
 
-    problems.extend(_oversized_sections(units, accepted))
+    problems.extend(_oversized_sections(units, accepted, fixed_points))
     return accepted, ("; ".join(problems) if problems else None)
+
+
+def _points_by_index(points: list) -> dict:
+    """Group points by the block they precede, shallowest level first.
+
+    In: accepted points.
+    Out: {before_unit: [point, ...]}. A chapter and the subheading that
+         opens it share one block; level order keeps the parent first.
+    """
+    grouped = {}
+    for point in points:
+        grouped.setdefault(point["before_unit"], []).append(point)
+    for group in grouped.values():
+        group.sort(key=lambda p: p.get("level", 2))
+    return grouped
 
 
 def apply_points(text: str, units: list, points: list) -> str:
@@ -364,30 +385,32 @@ def apply_points(text: str, units: list, points: list) -> str:
     In: source text, its units, accepted points.
     Out: structured_text — source sliced by unit offsets, never by
          concatenating unit["text"], so whitespace between units (blank
-         lines after a heading) survives. Only "## heading" lines are
-         added; no source character is altered, dropped, or duplicated.
+         lines after a heading) survives. Only heading lines are added, at
+         each point's own level; no source character is altered, dropped,
+         or duplicated.
     """
     if not units:
         return text
-    by_index = {p["before_unit"]: p["heading"] for p in points}
+    by_index = _points_by_index(points)
     out = []
     prev_end = units[0]["start"]
 
-    def emit_heading(heading: str) -> None:
-        tail = out[-1] if out else "\n\n"
-        if not tail.endswith("\n\n"):
-            out.append("\n" if tail.endswith("\n") else "\n\n")
-        out.append(f"## {heading}\n\n")
+    def emit_headings(group: list) -> None:
+        for point in group:
+            tail = out[-1] if out else "\n\n"
+            if not tail.endswith("\n\n"):
+                out.append("\n" if tail.endswith("\n") else "\n\n")
+            out.append(f"{'#' * max(2, point.get('level', 2))} {point['heading']}\n\n")
 
     for unit in units:
         if unit["start"] > prev_end:
             out.append(text[prev_end:unit["start"]])
         if unit["index"] in by_index:
-            emit_heading(by_index[unit["index"]])
+            emit_headings(by_index[unit["index"]])
         out.append(unit["text"])
         prev_end = unit["end"]
     if len(units) in by_index:
-        emit_heading(by_index[len(units)])
+        emit_headings(by_index[len(units)])
     return "".join(out)
 
 
@@ -397,28 +420,31 @@ def split_sections(units: list, points: list) -> list:
     In: units, accepted points.
     Out: [{"heading_path", "units"}] in document order. heading_path is the
          enclosing heading hierarchy — an "###" under an "##" inherits
-         both. An inserted heading always sits at level 2 under the
-         document's own level-1 title, never under a previously inserted
-         one, so consecutive insertions are siblings rather than an
-         ever-deepening chain. A document's own heading line stays inside
-         its section's units (it is source text); an inserted heading
-         never does (it is model output).
+         both. Inserted headings nest by their own level: level-2 points
+         are siblings under the document's own level-1 title, a level-3
+         point sits under the level-2 one above it. A document's own
+         heading line stays inside its section's units (it is source
+         text); an inserted heading never does (it is model output).
     """
-    inserted = {p["before_unit"]: p["heading"] for p in points}
+    inserted = _points_by_index(points)
     sections = []
     own_path = []   # the document's own headings only
+    ins_path = []   # inserted headings, deepest last
     path = []       # what the current section reports, insertions included
     current = None
 
     for unit in units:
-        if unit["index"] in inserted:
-            path = own_path[:1] + [inserted[unit["index"]]]
+        for point in inserted.get(unit["index"], ()):
+            level = max(2, point.get("level", 2))
+            ins_path = ins_path[:level - 2] + [point["heading"]]
+            path = own_path[:1] + ins_path
             current = {"heading_path": list(path), "units": []}
             sections.append(current)
         own = _heading_unit(unit)
         if own:
             level, title = own
             own_path = own_path[:level - 1] + [title]
+            ins_path = []
             path = list(own_path)
             current = {"heading_path": list(path), "units": []}
             sections.append(current)
@@ -534,6 +560,141 @@ def _build_chunks(text: str, sections: list, source_kind: str,
     return chunks
 
 
+def _unit_seconds(unit: dict) -> "int | None":
+    """Read a unit's start time in seconds.
+
+    In: transcript unit.
+    Out: seconds, or None for a unit with no [MM:SS] stamp.
+    """
+    stamp = unit.get("stamp")
+    return _parse_stamp(stamp) if stamp else None
+
+
+def chapter_points(units: list, chapters: list) -> list:
+    """Turn a video's published chapters into fixed level-2 points.
+
+    In: transcript units, chapters as {"title", "start"} with start in
+        seconds (yt-dlp's `chapters` shape, `start_time` also accepted).
+    Out: one point per chapter that lands on a unit, in document order,
+         deduped by block. A chapter starting mid-segment attaches to the
+         first segment at or after it; chapters past the last segment and
+         chapters collapsing onto a block already taken are dropped.
+    """
+    stamped = [(u["index"], _unit_seconds(u)) for u in units]
+    stamped = [(i, s) for i, s in stamped if s is not None]
+    if not stamped:
+        return []
+
+    points = []
+    taken = set()
+    for chapter in chapters or []:
+        title = str(chapter.get("title") or "").strip()
+        start = chapter.get("start", chapter.get("start_time"))
+        if not title or start is None:
+            continue
+        index = next((i for i, s in stamped if s >= float(start)), None)
+        if index is None or index in taken:
+            continue
+        taken.add(index)
+        points.append({"before_unit": index, "anchor": "", "heading": title, "level": 2})
+    points.sort(key=lambda p: p["before_unit"])
+    return points
+
+
+def _chapter_spans(units: list, points: list) -> list:
+    """Describe each chapter to the heading model in block terms.
+
+    In: units, chapter points from chapter_points().
+    Out: [{"title", "first_unit", "last_unit", "chars", "long"}] — "long"
+         marks a chapter whose body exceeds TARGET_CHARS, the only kind
+         the model is asked to subdivide further.
+    """
+    spans = []
+    for position, point in enumerate(points):
+        first = point["before_unit"]
+        last = (points[position + 1]["before_unit"] - 1 if position + 1 < len(points)
+                else len(units) - 1)
+        if last < first:
+            continue
+        chars = units[last]["end"] - units[first]["start"]
+        spans.append({
+            "title": point["heading"],
+            "first_unit": first,
+            "last_unit": last,
+            "chars": chars,
+            "long": chars > TARGET_CHARS,
+        })
+    return spans
+
+
+def _chapter_complaints(spans: list, points: list) -> list:
+    """Name every chapter the model left unlabeled or undivided.
+
+    In: chapter spans, the model's accepted subheading points.
+    Out: one message per offending chapter, empty when every chapter has
+         its opening subheading and every long chapter has an interior
+         one. Fed straight into the single retry.
+    """
+    messages = []
+    for span in spans:
+        inside = [p["before_unit"] for p in points
+                  if span["first_unit"] <= p["before_unit"] <= span["last_unit"]]
+        if span["first_unit"] not in inside:
+            messages.append(
+                f"chapter {span['title']!r} has no heading at its first block "
+                f"{span['first_unit']} — every chapter needs exactly one there"
+            )
+            continue
+        if span["long"] and len(inside) < 2:
+            messages.append(
+                f"chapter {span['title']!r} is {span['chars']:,} chars over blocks "
+                f"{span['first_unit']}–{span['last_unit']} and got one heading — "
+                f"add headings inside it so no stretch exceeds {TARGET_CHARS:,} chars"
+            )
+    return messages
+
+
+def _resolve_chapter_points(units: list, chapters: list, use_llm: bool) -> tuple:
+    """Fix sections at the creator's chapters, let the model name and split them.
+
+    In: units, published chapters, LLM toggle.
+    Out: (accepted points, backend). Chapter points are level 2 and always
+         survive; the model's subheadings are level 3 and nest under them.
+         Backend "fixed" means chapters alone carried the split — either
+         the model was off or it returned nothing usable.
+    State: one or two headless heading_agent calls.
+    """
+    fixed = chapter_points(units, chapters)
+    if not fixed:
+        return [], None
+    if not use_llm:
+        return fixed, "chapters"
+
+    # Local import: heading_agent imports segment_units from this module.
+    from heading_agent import insert_headings
+
+    spans = _chapter_spans(units, fixed)
+    result = insert_headings(units, "transcript", chapters=spans)
+    points, message = ([], None) if not result.get("ok") else validate_points(
+        result.get("points") or [], units, level=3, fixed_points=fixed)
+    complaints = "; ".join(_chapter_complaints(spans, points))
+    feedback = "; ".join(m for m in (message, complaints) if m)
+
+    if feedback:
+        retry = insert_headings(units, "transcript", feedback=feedback, chapters=spans)
+        if retry.get("ok"):
+            retry_points, retry_message = validate_points(
+                retry.get("points") or [], units, level=3, fixed_points=fixed)
+            retry_complaints = _chapter_complaints(spans, retry_points)
+            if len(retry_complaints) < len(_chapter_complaints(spans, points)):
+                result, points = retry, retry_points
+
+    if not points:
+        return fixed, "chapters"
+    merged = sorted(fixed + points, key=lambda p: (p["before_unit"], p["level"]))
+    return merged, f"chapters+{result['backend']}"
+
+
 def _resolve_points(units: list, source_kind: str, use_llm: bool) -> tuple:
     """Get validated heading points, with one scoped retry.
 
@@ -578,10 +739,12 @@ def _resolve_points(units: list, source_kind: str, use_llm: bool) -> tuple:
     return [], "passthrough" if message is None else "fallback"
 
 
-def _chunk(text: str, source_kind: str, doc_title: str, channel: str, use_llm: bool) -> dict:
+def _chunk(text: str, source_kind: str, doc_title: str, channel: str, use_llm: bool,
+           chapters: list = None) -> dict:
     """Run the whole pipeline over one document's text.
 
-    In: raw text, source kind, title, channel, LLM toggle.
+    In: raw text, source kind, title, channel, LLM toggle, published
+        chapters (transcripts only).
     Out: see module docstring. Never raises; empty input fails as a dict.
     """
     if not text or not text.strip():
@@ -590,7 +753,11 @@ def _chunk(text: str, source_kind: str, doc_title: str, channel: str, use_llm: b
     if not units:
         return {"ok": False, "error": "empty document"}
 
-    points, backend = _resolve_points(units, source_kind, use_llm)
+    points, backend = (None, None)
+    if chapters:
+        points, backend = _resolve_chapter_points(units, chapters, use_llm)
+    if not points:
+        points, backend = _resolve_points(units, source_kind, use_llm)
     sections = split_sections(units, points)
     return {
         "ok": True,
@@ -613,15 +780,18 @@ def chunk_article(text: str, doc_title: str = "", *, use_llm: bool = True) -> di
 
 
 def chunk_transcript(text: str, *, video_title: str = "", channel: str = "",
-                     use_llm: bool = True) -> dict:
+                     use_llm: bool = True, chapters: list = None) -> dict:
     """Chunk a YouTube transcript into candidate snippets.
 
-    In: transcript.md text, video title and channel (not read from disk —
-        transcript.md carries neither; they live in the sibling
-        summary.md), LLM toggle.
-    Out: see module docstring; every chunk carries a [MM:SS] range.
+    In: transcript text, video title and channel (not read from disk — the
+        transcript carries neither), LLM toggle, the video's published
+        chapters from youtube.video_chapters().
+    Out: see module docstring; every chunk carries a [MM:SS] range. With
+         chapters, sections are cut at the creator's boundaries and the
+         model only names and subdivides them; without, it proposes the
+         boundaries itself.
     """
-    return _chunk(text, "transcript", video_title, channel, use_llm)
+    return _chunk(text, "transcript", video_title, channel, use_llm, chapters)
 
 
 def format_candidates(result: dict) -> str:
@@ -652,11 +822,11 @@ def format_candidates(result: dict) -> str:
 
 
 def invoke(path: str, kind: str = "article", title: str = "", channel: str = "",
-           use_llm: bool = True, **_kwargs) -> dict:
+           use_llm: bool = True, chapters: list = None, **_kwargs) -> dict:
     """Chunk a document from disk into candidate snippets.
 
     In: document path, kind ("article" | "transcript"), title, channel,
-        LLM toggle.
+        LLM toggle, published chapters (transcripts only).
     Out: see module docstring. A missing path or empty file fails as a
          dict; never raises.
     State: read-only.
@@ -666,7 +836,8 @@ def invoke(path: str, kind: str = "article", title: str = "", channel: str = "",
     except FileNotFoundError:
         return {"ok": False, "error": f"file not found: {path}"}
     if kind == "transcript":
-        return chunk_transcript(text, video_title=title, channel=channel, use_llm=use_llm)
+        return chunk_transcript(text, video_title=title, channel=channel,
+                                use_llm=use_llm, chapters=chapters)
     return chunk_article(text, title, use_llm=use_llm)
 
 
@@ -678,10 +849,21 @@ def main() -> int:
     parser.add_argument("--channel", default="")
     parser.add_argument("--no-llm", action="store_true", help="Skip the heading model")
     parser.add_argument("--table", action="store_true", help="Print the candidate table")
+    parser.add_argument("--url", default=None,
+                        help="Video URL; its published chapters become fixed section boundaries")
     args = parser.parse_args()
 
+    chapters = None
+    if args.url:
+        from youtube import video_chapters
+        fetched = video_chapters(args.url)
+        if not fetched.get("ok"):
+            print(f"chapters unavailable: {fetched['error']}", file=sys.stderr)
+        else:
+            chapters = fetched["chapters"]
+
     result = invoke(args.path, kind=args.kind, title=args.title,
-                    channel=args.channel, use_llm=not args.no_llm)
+                    channel=args.channel, use_llm=not args.no_llm, chapters=chapters)
     print(format_candidates(result) if args.table
           else json.dumps(result, indent=2, ensure_ascii=False))
     return 0 if result.get("ok") else 1
