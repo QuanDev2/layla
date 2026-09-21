@@ -95,10 +95,41 @@ real conversation.
 
 ## Next steps
 
-- Personal memory is built but untested in real use — the user will exercise
-  it and report back before any changes.
+- Personal memory is built and holds its first real row — the `self` entity
+  and a `preferred_clothing_brands` observation. Otherwise untested in
+  conversation.
 - Frame extraction remains designed-but-unbuilt: plan and proposed schema in
   `docs/youtube.md`.
+
+## Parked: identity and identifiers (2026-09-21, paused mid-discussion)
+
+Where the reasoning got to, so it doesn't restart from zero:
+
+- **`full_name` stays nullable and unsplit.** No first/last columns — name
+  structure varies by culture and the split is a classic data bug. `name` is
+  the label the user says; `full_name` is the written form when known.
+  Requiring it would tax the moment of capture, which must stay cheap.
+- **Identifiers are join keys, not descriptions.** A shoe size describes a
+  person; an email address points at them in another system. Different job,
+  so eventually a different table.
+- **For now they live as observations** — `attribute='email'`,
+  `attribute='phone'`. Zero schema change, handles multiple values, inherits
+  supersede when a number changes.
+- **Rejected: email/phone columns on `entities`.** Breaks on a second
+  address, and invites an endless column list (Signal, GitHub, Instagram).
+- **The trigger for a real `identifiers` table is enforcement, not storage.**
+  Sketch: `identifiers(entity_id, system, value, is_primary,
+  UNIQUE(system, value))`. That unique constraint is what observations
+  cannot provide, and it only matters when something inbound — an email, an
+  SMS — has to be matched to an entity. Migration then is a read of
+  `attribute IN ('email','phone')` and an insert.
+- **Do this cheaply even now:** normalize on the way in — emails lowercased,
+  phones E.164 (`+14155551234`) — or the future unique index will reject
+  duplicates that differ only textually.
+
+Still undecided: whether the `self` entity should carry the user's real
+first name (useful once contacts or messaging integration exists) rather
+than the placeholder `me` it was created with.
 
 ## Open questions
 
