@@ -199,6 +199,22 @@ decision log that edits its own history is worthless.
     metadata lookup survives as `youtube.video_metadata()`, which supplies
     the title and channel `chunk_transcript` needs for its prefix.
     A video is now just a document with `source_type='transcript'`.
+22. **Frame images live on disk; the database holds a path.** Decided
+    2026-09-20, ahead of any frame code, so the `assets` table can be built
+    without re-opening it. Not decided on performance: SQLite is ~35% faster
+    than the filesystem for ~10KB blobs and loses somewhere between 250KiB
+    and 1MiB (sqlite.org/fasterthanfs.html and the Jim Gray paper it cites),
+    and a 720p JPEG at ~100–300KB sits on that crossover. The reasons are
+    operational: a vision model is handed a path, so a BLOB would be exported
+    to a temp file on every look; incremental backup copies only new frames
+    rather than rewriting a multi-GB database; and `knowledge.db` stays small
+    enough to move and inspect. The cost accepted is orphan risk in both
+    directions — a deleted row leaves a file, a deleted file leaves a
+    dangling path — mitigated by `assets.sha256` and a periodic sweep, never
+    by moving bytes into the database. Retrieval is unaffected either way: a
+    frame is found through its LLM description, stored as a snippet with
+    `kind='frame'` and `asset_id`. Full shape and the two still-open options
+    (OCR text, ordering) in `docs/youtube.md`.
 
 ## Schema (built; see db.py)
 
