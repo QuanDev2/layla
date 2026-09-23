@@ -48,7 +48,7 @@ flowchart TD
     A6 -->|nothing| A11["11. triage.discard_document()"]
     A7 --> A12["12. You confirm the chunk table"]
     A12 --> A13["13. triage.write_chunks()"]
-    A8 --> A14["14. embed.py → Voyage voyage-4"]
+    A8 --> A14["14. embed.py → EmbeddingGemma via ollama"]
     A9 --> A14
     A10 --> A14
     A13 --> A14
@@ -115,7 +115,7 @@ flowchart TD
     B7 -->|no rows| B8["8. retry with OR"]
     B7 -->|rows| B9["9. BM25 rank order"]
     B8 --> B9
-    B6 --> B10["10. embed query via Voyage"]
+    B6 --> B10["10. embed query via EmbeddingGemma"]
     B10 --> B11["11. load rows where embedding_model matches"]
     B11 --> B12["12. cosine scan in numpy → rank order"]
     B9 --> B13["13. _rrf_fuse: 1/(60+rank) summed"]
@@ -189,7 +189,7 @@ flowchart TD
 | `heading_agent.py` | Proposes heading insertion points for unstructured text, or subheadings inside fixed chapters. | `chunker.py` only |
 | `youtube.py` | Fetches a video's captions (two sources, fallback), its title/channel/duration, and its published chapters. CLI. | Layla |
 | `triage.py` | Writes `snippets`, batch-embeds them. The only write path into the corpus; refuses a transcript batch that ignored published chapters. | Layla |
-| `embed.py` | Voyage `voyage-4`, float32 blob codec, `.env` key loading. | `triage.py`, `search.py` |
+| `embed.py` | EmbeddingGemma-300M Q8_0 over local ollama HTTP, task prefixes, float32 blob codec, `.env` loading. | `triage.py`, `search.py` |
 | `search.py` | BM25 + cosine, fused by RRF, neighbor expansion, source metadata. | Layla |
 | `entities.py` | Registry of people and things; alias resolution. | Layla |
 | `observations.py` | Exact-lookup store for what the user tells Layla about an entity. | Layla |
@@ -206,8 +206,11 @@ flowchart TD
 - **No bulk-import subagent.** `summarizer_agent.py` was dropped (decision 7):
   the workflow is one article at a time, and bulk mode's mechanism — keeping
   source text out of Layla's context — is exactly what discussion needs.
-- **No scheduler, no daemon, no router process.** Every arrow in every diagram
-  above is either you talking or Layla making a library call.
+- **No scheduler, no router process.** Every arrow in every diagram above is
+  either you talking or Layla making a library call. The one background process
+  is the ollama daemon serving the embedding model on localhost — it is a
+  model server, not part of the workflow's control flow, and everything
+  degrades gracefully when it is down.
 - **No playlist triage, no markdown store, no frame extraction.** The YouTube
   domain was folded into one fetcher (decision 21); `docs/youtube.md` holds
   the frame plan and the schema it would need.
@@ -221,6 +224,6 @@ flowchart TD
    `snippets` and joins `documents` back for title, url, and date.
 
 2. **Nothing enters the corpus without an explicit yes, and no failure is
-   fatal.** A dead Voyage call writes `embedding = NULL`; a dead heading model
-   falls back to the document's own headings; a malformed FTS query degrades
-   to `vector_only` instead of raising.
+   fatal.** A dead embedding daemon writes `embedding = NULL`; a dead heading
+   model falls back to the document's own headings; a malformed FTS query
+   degrades to `vector_only` instead of raising.

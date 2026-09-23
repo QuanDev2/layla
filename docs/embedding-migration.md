@@ -1,3 +1,11 @@
+> **Executed 2026-09-23.** This plan is complete and kept as the record of
+> how the decision was reached, not as pending work. The current system is
+> described in `docs/system-overview.md` and `HANDOFF.md`; the outcome and
+> the two deviations from this spec are recorded in `docs/decisions.md`
+> under "Completed migration tasks" and decision 6. Two claims below were
+> wrong and are corrected there: Ollama *does* publish quantization tags
+> (§2), and `_load_dotenv()` has no Voyage-specific half to delete (§3).
+
 # Milestone: Voyage → EmbeddingGemma (local, permanent)
 
 Build spec for replacing the embedding provider. Written to be picked up cold:

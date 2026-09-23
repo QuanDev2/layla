@@ -63,14 +63,35 @@ decision log that edits its own history is worthless.
    non-issue for this provider — the cap exists for the EmbeddingGemma
    local swap target below, whose 2,048-token window is the real
    constraint it guards against.
-6. **Local fallback (post-PoC swap target): EmbeddingGemma-300M, Q8_0.**
-   Not fp32 — quality delta vs. full precision is 0.23 MTEB points on
-   English v2 (68.36 → 68.13), noise-level, at roughly 4x the disk/RAM of
-   Q8. Not Q4 either — Q4's extra savings over Q8 aren't worth its slightly
-   larger quality gap (0.45 pts) on hardware with no real RAM constraint.
-   `fastembed`'s default (`bge-small-en-v1.5`) was rejected in favor of this
-   because `bge-small` caps at 512 input tokens, forcing aggressive chunking
-   of whole articles; EmbeddingGemma runs 2,048.
+   **Superseded (2026-09-23, embedding migration):** Voyage is gone. The
+   swap to the local model in decision 6 happened, `embed.py` no longer
+   contains a Voyage code path, and the corpus was re-embedded. This
+   decision is retained as the record of why the PoC started on a hosted
+   provider, not as a description of the current system.
+6. **Local embedding model: EmbeddingGemma-300M, Q8_0.** Not full
+   precision — quality delta is 0.18 MTEB points on English v2 (69.67 →
+   69.49), noise-level, at roughly 2x the disk and RAM of Q8. Not Q4
+   either — Q4's extra savings over Q8 aren't worth its larger quality
+   gap (0.36 pts on English, 0.77 on code) on hardware with no real RAM
+   constraint. `fastembed`'s default (`bge-small-en-v1.5`) was rejected in
+   favor of this because `bge-small` caps at 512 input tokens, forcing
+   aggressive chunking of whole articles; EmbeddingGemma runs 2,048.
+   **Correction (2026-09-23):** the figures originally recorded here
+   (0.23 pts, 68.36 → 68.13) were wrong — 68.37 is full precision at 256
+   dimensions, a row from the Matryoshka truncation table misread as a
+   quantization row. Google's published QAT numbers at 768d are 69.49
+   (Q8_0), 69.31 (Q4_0), 69.32 (mixed precision) against 69.67 full
+   precision. The conclusion is unchanged and the margin is smaller than
+   claimed.
+   **Executed (2026-09-23):** served by the local ollama daemon, tag
+   `embeddinggemma:300m-qat-q8_0` — always the explicit tag, never bare
+   `embeddinggemma`, which resolves to the BF16 build and a different
+   vector space. These are quantization-aware-trained checkpoints, not
+   post-training quantization, which is why the delta is fractions of a
+   point. Stored `embedding_model` is `embeddinggemma-q8`; it names the
+   quantization because it is the cross-space guard, so it must change if
+   the quantization ever does. Mixed precision is strictly dominated by
+   Q8_0 on all three benchmarks and is not published as an ollama tag.
 7. **Bulk import via bootstrapped subagent: rejected, not deferred.**
    Original decision: many articles at once get a blank `omp -p` subprocess
    each, mirroring `agents/youtube/agent.py`, producing candidate summaries
@@ -326,7 +347,7 @@ CREATE TABLE snippets (
   tags            TEXT,                              -- comma-separated, free-form
   created_at      TEXT NOT NULL,
   embedding       BLOB,                               -- raw float32 vector bytes
-  embedding_model TEXT NOT NULL                        -- e.g. 'voyage-4', 'embeddinggemma-q8'
+  embedding_model TEXT                                 -- 'embeddinggemma-q8'; NULL only alongside a NULL embedding
 );
 
 CREATE VIRTUAL TABLE snippets_fts USING fts5(
@@ -371,7 +392,7 @@ flowchart TD
     D --> E{Triage decision}
     E -->|keep whole/parts| F[Write snippet: excerpt or synthesis]
     E -->|discard| G[documents.status=discarded, no snippets]
-    F --> H[Embed: Voyage now, EmbeddingGemma Q8_0 later]
+    F --> H[Embed: EmbeddingGemma Q8_0, local via ollama]
     H --> I[snippets_fts indexed]
     I --> J[documents.status=kept/partial]
 
@@ -392,7 +413,7 @@ layla/
                        context prefixes, public API + CLI
   heading_agent.py  — heading-insertion call; pluggable backend (omp | anthropic | off)
   triage.py         — write snippets from triage decisions
-  embed.py          — provider abstraction (Voyage now, swappable to local)
+  embed.py          — provider abstraction (local EmbeddingGemma via ollama)
   search.py         — hybrid search: BM25 + cosine, fused by RRF
   youtube.py        — captions (two sources, fallback) + video metadata
   dev/
@@ -441,21 +462,28 @@ never built and never will be (decision 7).
   keep decision), so it grows into a redundancy problem far slower than a
   system that logs everything by default.
 
-## Future migration tasks
+## Completed migration tasks
 
-- **Re-embed job: Voyage → EmbeddingGemma-300M Q8_0.** Triggered whenever
-  the switch to the local model actually happens (e.g. Voyage's free tier
-  runs out). Not needed for the PoC — noted here so it isn't rediscovered
-  as a surprise later.
-  - **What it does:** for every row where `embedding_model != 'embeddinggemma-q8'`,
-    re-run the already-stored `content` (untouched by this job) through
-    EmbeddingGemma and overwrite `embedding` + `embedding_model` on that row.
+- **Re-embed job: Voyage → EmbeddingGemma-300M Q8_0. Done 2026-09-23.**
+  Built as `triage.reembed(conn, document_id=None, model=None)` and run
+  over the whole corpus: 46/46 snippets re-embedded in 10.4s,
+  `SELECT DISTINCT embedding_model` now returns `embeddinggemma-q8` alone.
+  - **What it does:** for every row where `embedding IS NULL OR
+    embedding_model IS NOT 'embeddinggemma-q8'`, re-run the already-stored
+    `content` (untouched by this job) through EmbeddingGemma and overwrite
+    `embedding` + `embedding_model` on that row. Backfill and migration are
+    the same query — a missing vector and a stale one need identical work,
+    so there is no separate backfill function. `IS NOT` rather than `!=`
+    because SQLite's `!=` evaluates to NULL against a NULL column, silently
+    skipping exactly the rows that most need the work.
   - **Why it's safe:** `content` is the source of truth; `embedding` is a
     derived, regenerable index. Nothing about switching providers touches
     the actual text, so no data is at risk — only the vectors go stale
-    until this job runs.
-  - **Why it's cheap:** the destination model is local and free — this is
-    CPU time on-device, not a paid API bill, unlike a hypothetical reverse
+    until this job runs. Batches commit individually, so an interrupted
+    run leaves a consistent part-old/part-new corpus rather than rows whose
+    vector and model label disagree.
+  - **Why it's cheap:** the destination model is local and free — CPU/GPU
+    time on-device, not a paid API bill, unlike a hypothetical reverse
     migration.
   - **What still works before the migration runs:** FTS5 keyword search
     over `content` is completely unaffected by which embedding model is
@@ -463,10 +491,10 @@ never built and never will be (decision 7).
     vector/semantic search on unmigrated rows is degraded in the gap
     between switching the active provider and running this job.
   - **Guard while both embedding spaces briefly coexist:** `search.py`
-    should only run cosine similarity against rows whose `embedding_model`
+    only runs cosine similarity against rows whose `embedding_model`
     matches the currently active provider — comparing vectors across
     incompatible spaces produces silently wrong rankings, not an error, so
-    this must be an explicit filter, not an oversight.
+    this is an explicit filter, verified present before the swap.
 
 ## Chunking implementation plan
 
@@ -1143,14 +1171,16 @@ but not deterministic" note above). Calibrate check 1 accordingly:
   check 3 yields chunks that read as fragments mid-argument, raise `TARGET_CHARS` to
   2,600 (~650 tokens); do not add stored overlap, since read-time neighbor expansion
   (decision 15) is the mechanism for that problem.
-- **Resolved (2026-09-06, `embed.py` build): Voyage's over-limit behavior is
-  confirmed, not unconfirmed** — its `truncation` parameter defaults to
-  `True`: an over-length input is truncated by Voyage itself, never
-  errors. `embed.py` leaves this at its default rather than forcing it, so
-  no manual pre-truncation guard was needed. `content` in the database is
-  untouched either way — only the embedding call ever sees a truncated
-  copy, and `voyage-4`'s 32,000-token context means this never triggers in
-  practice at the current `MAX_CHARS` cap.
+- **Resolved (2026-09-06, `embed.py` build), revised (2026-09-23,
+  embedding migration): over-limit input is truncated by the model, never
+  an error.** Voyage's `truncation` parameter defaulted to `True` and
+  `embed.py` left it there. EmbeddingGemma behaves the same way: input past
+  its 2,048-token window is truncated by the model, so no manual
+  pre-truncation guard is needed. `content` in the database is untouched
+  either way — only the embedding call ever sees a truncated copy. The
+  margin is now much thinner: the window fell from 32,000 tokens to 2,048,
+  and `MAX_CHARS = 7000` (~1,750 tokens) is what keeps this from
+  triggering. `MAX_CHARS` cannot be raised without rechecking this.
 
 ## Status
 
@@ -1160,7 +1190,7 @@ candidate table) are built and verified against real fixtures.
 `heading_agent.py` (step 3), `judge.py`, and `eval.py` were built earlier —
 see the Repo layout note under Step 3 for why the latter two exist.
 `db.py`, `embed.py`, `triage.py`, `ingest.py`, and `search.py` are also
-built (schema/connection helper, Voyage provider abstraction, snippet
+built (schema/connection helper, local embedding provider, snippet
 writer, document capture, hybrid retrieval), as is `agents/knowledge/AGENTS.md`.
 `summarizer_agent.py` was dropped with decision 7 and will not be built.
 
@@ -1280,3 +1310,23 @@ nothing should.
 headings, densely covers the whole document) now serves Step 3 check 2 and
 Step 7 checks 1-2 — see those checks and Step 3's "`[]` is real but not
 deterministic" note for the calibrated (not exact-`[]`) expectation.
+
+**Embedding migration executed (2026-09-23):** Voyage → EmbeddingGemma-300M
+Q8_0, local via the ollama daemon. `embed.py` rewritten — `_embed_voyage`,
+`_post`'s retry loop, `API_URL`, `_RETRY_STATUSES` and the `VOYAGE_API_KEY`
+read all deleted; no `voyage` string survives in any `.py` file.
+`_load_dotenv()` was kept against the migration plan's instruction: it is
+generic, not provider-specific, and is the only loader of
+`ANTHROPIC_API_KEY` from `.env` for `heading_agent.py`'s optional backend.
+`triage.reembed()` added and run: 46/46 snippets migrated in 10.4s, one
+distinct `embedding_model`, zero NULLs. Verified end to end: 768-dim
+non-zero vectors; document and query prefixes produce different vectors for
+the same sentence (cosine 0.85, so the prefixes are load-bearing);
+`cos(wool, linen) = 0.577` against `cos(wool, tax) = 0.249`; lists longer
+than `MAX_BATCH` slice across requests with a text at index 0 and index 65
+embedding identically; a stopped daemon returns a named error and leaves
+rows untouched rather than half-written; `KNOWLEDGE_EMBED=off` still
+short-circuits with no network call. Retrieval re-verified with the same
+query used for the original Voyage backfill — `backend: hybrid`, document
+6's Linen chunk ranked first. Absolute RRF scores are not comparable across
+providers; ordering is.

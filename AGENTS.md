@@ -206,10 +206,11 @@ Tools hold capabilities; you don't. Secrets never enter this context — a tool
 process reads what it needs from the environment or `.env` and you invoke the
 tool. Never read credential files into the conversation, never echo a token.
 
-`VOYAGE_API_KEY` lives in the repo-root `.env` (gitignored), loaded by
-embed.py. `KNOWLEDGE_LLM` = `omp` (default) | `anthropic` | `off` selects
-chunker.py's heading backend. `KNOWLEDGE_EMBED` = `voyage` (default) | `off`
-(no API call; keyword search still works).
+Embedding needs no key — it runs locally. `KNOWLEDGE_LLM` = `omp` (default) |
+`anthropic` | `off` selects chunker.py's heading backend, and the `anthropic`
+backend's `ANTHROPIC_API_KEY` lives in the repo-root `.env` (gitignored),
+loaded by embed.py's generic `_load_dotenv()`. `KNOWLEDGE_EMBED` = `local`
+(default) | `off` (no request at all; keyword search still works).
 
 ## Notes
 
@@ -243,7 +244,12 @@ often here:
 ## Environment
 
 - Python 3.9. Packages: `pip3 install -r requirements.txt`.
-- System binaries, brew-managed, invoked as subprocesses: `yt-dlp` (required
-  for video metadata and the caption fallback) and `ffmpeg` (frames, unbuilt).
-  Rationale in `docs/youtube.md`.
+- System binaries, invoked as subprocesses or over localhost HTTP: `yt-dlp`
+  (required for video metadata and the caption fallback) and `ffmpeg` (frames,
+  unbuilt), both brew-managed; rationale in `docs/youtube.md`. `ollama` serves
+  the embedding model at `127.0.0.1:11434` — required for every embed, so
+  `search.py` degrades to `fts_only` and `triage.py` writes `embedding NULL`
+  when it is down. Pull the model once: `ollama pull embeddinggemma:300m-qat-q8_0`.
+  It loads on demand and unloads after ~5 minutes idle, so an empty `ollama ps`
+  is normal; `ollama list` is the install check.
 - `data/` is gitignored — local cache and fixtures, not source.

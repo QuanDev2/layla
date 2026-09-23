@@ -4,3 +4,5 @@ numpy==2.0.2
 
 # System binaries are NOT listed here — they are not pip-managed.
 # See "Prerequisites" in docs/youtube.md: yt-dlp (required), ffmpeg (frames, planned).
+# ollama is also required — it serves the embedding model on 127.0.0.1:11434.
+# Pull it once: ollama pull embeddinggemma:300m-qat-q8_0

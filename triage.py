@@ -208,6 +208,61 @@ def write_chunks(conn, document_id: int, result: dict, tags=None) -> dict:
     return {"ok": True, "snippet_ids": snippet_ids, "embedded": embedded, "total": len(chunks)}
 
 
+def reembed(conn, document_id: int = None, model: str = None) -> dict:
+    """Re-embed rows whose vector is missing or from another model.
+
+    In: open connection, optional document_id to scope the run, optional
+        target model (defaults to embed.DEFAULT_MODEL). Backfill and
+        provider migration are the same query — a missing vector and a
+        stale one both need the same work.
+    Out: {"ok", "reembedded": int, "skipped": int, "total": int} or
+         {"ok": False, "error": str} carrying the same counts for the
+         batches that did land. A failed batch leaves its rows untouched
+         rather than half-written.
+    State: embed.embed() per MAX_BATCH slice, committed per batch, so a
+           mid-run failure leaves a consistent partially-migrated corpus —
+           search.py filters by embedding_model, so mixed spaces never
+           compare.
+    """
+    target = model or embed_mod.DEFAULT_MODEL
+    where = "embedding IS NULL OR embedding_model IS NOT ?"
+    params = [target]
+    if document_id is not None:
+        if not _document_exists(conn, document_id):
+            return {"ok": False, "error": f"no document with id {document_id}"}
+        where = f"({where}) AND document_id = ?"
+        params.append(document_id)
+
+    scope = "WHERE document_id = ?" if document_id is not None else ""
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM snippets {scope}",
+        (document_id,) if document_id is not None else (),
+    ).fetchone()[0]
+    rows = conn.execute(
+        f"SELECT id, content FROM snippets WHERE {where} ORDER BY id", params
+    ).fetchall()
+
+    reembedded = 0
+    for start in range(0, len(rows), embed_mod.MAX_BATCH):
+        batch = rows[start:start + embed_mod.MAX_BATCH]
+        result = embed_mod.embed([r["content"] for r in batch], model=target,
+                                 input_type="document")
+        if not result.get("ok"):
+            return {"ok": False, "error": result.get("error"), "reembedded": reembedded,
+                    "skipped": total - len(rows), "total": total}
+        conn.executemany(
+            "UPDATE snippets SET embedding = ?, embedding_model = ? WHERE id = ?",
+            [(embed_mod.to_blob(v), target, r["id"])
+             for r, v in zip(batch, result["vectors"])],
+        )
+        conn.commit()
+        reembedded += len(batch)
+
+    return {"ok": True, "reembedded": reembedded, "skipped": total - len(rows),
+            "total": total}
+
+
+
 def set_status(conn, document_id: int, status: str) -> dict:
     """Set a document's triage status once the conversation concludes.
 

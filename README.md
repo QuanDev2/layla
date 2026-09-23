@@ -35,8 +35,8 @@ shows it, and writes only on confirmation.
   anchor-verified with bounded repair. The splitter itself is deterministic and
   never splits a code fence or a sentence.
 - **Hybrid retrieval, fused by rank.** FTS5/BM25 for literal terms and
-  brute-force cosine over Voyage embeddings for meaning, combined by Reciprocal
-  Rank Fusion because BM25 and cosine live on incomparable scales.
+  brute-force cosine over local EmbeddingGemma embeddings for meaning, combined
+  by Reciprocal Rank Fusion because BM25 and cosine live on incomparable scales.
 - **Read-time neighbor expansion instead of stored overlap.** A hit joins its
   adjacent chunks at query time, so the index holds one copy of every passage,
   the window is retunable without re-embedding, and discarded material can
@@ -55,8 +55,8 @@ shows it, and writes only on confirmation.
 
 ```bash
 pip3 install -r requirements.txt
-brew install yt-dlp                 # video captions + metadata
-echo 'VOYAGE_API_KEY=...' > .env    # embeddings; free tier
+brew install yt-dlp ollama          # video captions + metadata; embedding model host
+ollama pull embeddinggemma:300m-qat-q8_0   # ~340MB, once; no API key anywhere
 
 # split a document into candidate snippets and show the confirm table
 python3 chunker.py path/to/article.md --kind article --title "Title" --table
@@ -90,7 +90,7 @@ retrieval degrades to keyword-only rather than failing.
 | `chunker.py` | Segment → propose headings → validate → split → context prefix |
 | `heading_agent.py` | The heading-insertion model call; pluggable backend |
 | `triage.py` | The only write path into `snippets`; batch-embeds |
-| `embed.py` | Voyage provider, float32 blob codec, `.env` loader |
+| `embed.py` | Local EmbeddingGemma via ollama, float32 blob codec, `.env` loader |
 | `search.py` | BM25 + cosine, RRF fusion, neighbor expansion |
 | `youtube.py` | Captions (two sources with fallback) + video metadata |
 | `dev/` | Offline heading-quality grader and its manual tuning harness |
@@ -117,6 +117,7 @@ chunking, and retrieval.
 ## Status
 
 Used for real, single-user, on macOS with Python 3.9. The retrieval path,
-capture path, and chunker are all exercised against real documents and the live
-Voyage API. Frame extraction from video is designed but unbuilt; the plan and
-the schema it needs are in `docs/youtube.md`.
+capture path, and chunker are all exercised against real documents. Embeddings
+run locally — no embedding API key, no network call. Frame extraction from
+video is designed but unbuilt; the plan and the schema it needs are in
+`docs/youtube.md`.

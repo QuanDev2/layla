@@ -33,8 +33,8 @@ is where the human stays in the loop.
   NULL vector; a dead heading model falls back to the document's own headings;
   a malformed keyword query degrades instead of raising.
 - **Reasoning rides the existing session login.** No per-agent API billing.
-  The only paid-tier dependency is embeddings, and Voyage's free tier covers
-  the volume.
+  Embeddings run locally on EmbeddingGemma-300M, so there is no paid-tier
+  dependency left at all.
 - **On-demand, not scheduled.** Results are only read when you sit down, so
   session-triggered work costs nothing and loses nothing.
 - **Subject-agnostic.** Tags are free-form and retrieval has no topical
@@ -68,7 +68,5 @@ Nothing below is designed. Listing them as "next" would overstate them.
 - **Frame extraction** — pull slides and charts from a video and align them
   with the transcript. The pipeline and its database schema are worked out in
   `youtube.md`; no code exists.
-- **Local embeddings** — swap Voyage for EmbeddingGemma-300M Q8_0 if the free
-  tier ever runs out. The migration job is specified in `decisions.md`.
 - **Email and calendar** — long-standing wishes, blocked on picking a provider
   and an auth model. Neither has a design.

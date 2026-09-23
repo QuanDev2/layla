@@ -15,6 +15,19 @@ touching a module, not this file.
 
 ## What changed on 2026-09-23
 
+- **Embeddings are local and permanent — Voyage is deleted.** `embed.py` now
+  talks to EmbeddingGemma-300M Q8_0 over the ollama daemon at
+  `127.0.0.1:11434/api/embed`; no `voyage` string survives in any `.py` file,
+  and embedding works with no network and no API key. `triage.reembed()` was
+  added and run over the whole corpus — 46/46 snippets migrated in 10.4s to a
+  single `embedding_model`, `embeddinggemma-q8`. Retrieval re-verified with the
+  query used for the original backfill: `backend: hybrid`, document 6's Linen
+  chunk first. Two deviations from `docs/embedding-migration.md`: lists longer
+  than `MAX_BATCH` now slice across requests instead of being rejected (a
+  70-chunk transcript reaches `write_chunks` as one call, so rejection was a
+  new failure mode), and `_load_dotenv()` was kept because it is generic and is
+  the only loader of `ANTHROPIC_API_KEY` for `heading_agent.py`.
+
 - **Chapter anchoring is enforced, not instructed.** The rule lived only in
   prose, and `chunker.py`'s `if chapters:` was a consumer-side conditional: a
   call without `--url` was legal, exited 0, and produced plausible chunks with
@@ -104,7 +117,7 @@ touching a module, not this file.
 | `chunker.py` | Segments a document, proposes headings via a pluggable LLM backend, splits into ~1,800-char chunks with context prefixes; `invoke_document()` reads a captured document's chapters from its row and fixes boundaries there |
 | `heading_agent.py` | The heading-proposal call chunker.py wraps (omp \| anthropic \| off); works inside fixed chapters when passed them |
 | `triage.py` | Writes confirmed excerpts/synthesis/rejections/chunks into `snippets`, batch-embeds; refuses a transcript batch that ignored published chapters |
-| `embed.py` | Voyage AI (`voyage-4`), float32 blob codec, `.env` loader |
+| `embed.py` | EmbeddingGemma-300M Q8_0 over local ollama HTTP, task prefixes, float32 blob codec, `.env` loader |
 | `search.py` | Hybrid FTS5 + cosine, fused by RRF, neighbor expansion; takes caller-extracted `terms` |
 | `youtube.py` | Captions with two-source fallback + title/channel/duration + published chapters via yt-dlp |
 | `entities.py` | Registry of people/things with alias resolution; `resolve` returns candidates, never picks |
@@ -116,9 +129,15 @@ touching a module, not this file.
 - **SQLite, not a vector database.** Brute-force cosine in numpy beats an ANN
   index at low-thousands scale — benchmarked ~13ms/~60MB at 5,000 rows.
   Revisit (`sqlite-vec`) only past tens of thousands of rows.
-- **Voyage `voyage-4`.** `voyage-3.x` lost free-tier access under current
-  pricing — never use it. Key in `.env` (gitignored), loaded by a stdlib parser
-  in `embed.py`.
+- **Local embeddings, EmbeddingGemma-300M Q8_0 via ollama.** No API key, no
+  network. `OLLAMA_MODEL` pins the explicit tag `embeddinggemma:300m-qat-q8_0` —
+  bare `embeddinggemma` resolves to the BF16 build and a different vector
+  space. Stored `embedding_model` is `embeddinggemma-q8` and names the
+  quantization because `search.py` uses it as the cross-space guard. Task
+  prefixes (`title: none | text:` / `task: search result | query:`) are applied
+  inside `_embed_local()`, never at call sites — omitting them measurably
+  degrades retrieval. Context window is 2,048 tokens, down from Voyage's
+  32,000: `MAX_CHARS = 7000` fits, and cannot be raised without rechecking.
 - **A failed/missing embed is never fatal.** Rows are written with
   `embedding=NULL` rather than blocking — still keyword-searchable.
 - **Temporal boost was cut** after design review: real query phrasing doesn't
@@ -131,7 +150,7 @@ touching a module, not this file.
 
 ## Verified
 
-Every module was verified against real fixtures and the real Voyage API. On
+Every module was verified against real fixtures and a live embedding model. On
 2026-09-20, post-flatten: existing document 1 still searches `backend: hybrid`;
 `chunker.py` CLI produces 31 chunks on the article fixture with prefixes 25
 chars shorter than pre-fix; and a full video round-trip ran end to end —
