@@ -27,7 +27,11 @@ CREATE TABLE IF NOT EXISTS documents (
     raw_text        TEXT NOT NULL,
     structured_text TEXT,
     agent_summary   TEXT,
-    status          TEXT NOT NULL DEFAULT 'pending'
+    status          TEXT NOT NULL DEFAULT 'pending',
+    -- JSON blob owned by metadata.py: author plus source-specific keys
+    -- (a video's chapters/duration). One column, so a new source type
+    -- never costs a migration.
+    source_metadata TEXT
 );
 
 CREATE TABLE IF NOT EXISTS snippets (
@@ -99,14 +103,32 @@ CREATE INDEX IF NOT EXISTS observations_entity
 """
 
 
+# CREATE TABLE IF NOT EXISTS leaves an existing table untouched, so a column
+# added after a database was created needs its own ALTER.
+_ADDED_COLUMNS = (("documents", "source_metadata", "TEXT"),)
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    """Add columns the schema gained after this database was created.
+
+    In: open connection.
+    Out: none. Idempotent — each column is added only when absent.
+    """
+    for table, column, decl in _ADDED_COLUMNS:
+        present = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in present:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     """Apply the schema to a connection.
 
     In: open connection.
-    Out: none. Idempotent — every statement is CREATE-IF-NOT-EXISTS, so
-         calling this on an already-initialized database is a no-op.
+    Out: none. Idempotent — every statement is CREATE-IF-NOT-EXISTS, and
+         columns added later are backfilled by _migrate_columns.
     """
     conn.executescript(SCHEMA_SQL)
+    _migrate_columns(conn)
     conn.commit()
 
 

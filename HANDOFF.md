@@ -9,9 +9,35 @@ and closed `kept` — 12 snippets, all embedded, searchable.
 
 Nothing is unbuilt except frame extraction, which is designed only.
 
-Full decision log: `docs/decisions.md` (21 numbered decisions, do not
+Full decision log: `docs/decisions.md` (24 numbered decisions, do not
 re-litigate). Architecture: `docs/system-overview.md`. Read those before
 touching a module, not this file.
+
+## What changed on 2026-09-23
+
+- **Chapter anchoring is enforced, not instructed.** The rule lived only in
+  prose, and `chunker.py`'s `if chapters:` was a consumer-side conditional: a
+  call without `--url` was legal, exited 0, and produced plausible chunks with
+  wrong headings. It happened on a real document. Two changes close it:
+  `chunker.invoke_document(conn, document_id)` reads text, title, author, and
+  chapters from the row (no flag to forget, no second yt-dlp call, no network
+  at chunk time), and `triage.write_chunks()` refuses a transcript batch whose
+  `chapters_used` is false when the video published chapters.
+- **`documents.source_metadata`, one JSON blob owned by `metadata.py`**
+  (decision 24). Common keys flat (`author`), source-specific keys nested per
+  kind (`video: {video_id, duration, chapters}`). Chosen over typed columns so
+  a new source type costs no migration. `db.py` gained `_migrate_columns()`
+  because `CREATE TABLE IF NOT EXISTS` never alters an existing table.
+- **Unrecorded chapters and "creator published none" are now different
+  facts.** A failed `video_chapters()` lookup omits the key entirely and is
+  refused at both the chunker and the write gate; a chapterless video records
+  `[]` and is allowed through. Conflating them is what let the bad path look
+  legitimate.
+- **`--url` removed from chunker.py.** Its only job was refetching chapters
+  that capture now stores.
+- **Document 6 (Laura VonV, fabric guide) written with the chapter path** —
+  22 snippets, `backend=chapters+omp`, status `kept`. Its embeddings failed
+  mid-outage and were backfilled afterward; the corpus is now 46/46 embedded.
 
 ## What changed on 2026-09-21
 
@@ -73,10 +99,11 @@ touching a module, not this file.
 | Path | Does |
 |---|---|
 | `db.py` | Schema (`documents`, `snippets`, `snippets_fts`, `entities`, `observations`) + connection helper; FTS5 kept in sync by triggers |
-| `ingest.py` | Captures already-fetched text into a `documents` row, dedupes by URL |
-| `chunker.py` | Segments a document, proposes headings via a pluggable LLM backend, splits into ~1,800-char chunks with context prefixes; fixes boundaries at a video's chapters when given them |
+| `ingest.py` | Captures already-fetched text into a `documents` row with its source metadata blob, dedupes by URL |
+| `metadata.py` | Owns `documents.source_metadata`: builds it from a fetcher result, reads back author and chapters, keeps "unrecorded" distinct from "none published" |
+| `chunker.py` | Segments a document, proposes headings via a pluggable LLM backend, splits into ~1,800-char chunks with context prefixes; `invoke_document()` reads a captured document's chapters from its row and fixes boundaries there |
 | `heading_agent.py` | The heading-proposal call chunker.py wraps (omp \| anthropic \| off); works inside fixed chapters when passed them |
-| `triage.py` | Writes confirmed excerpts/synthesis/rejections/chunks into `snippets`, batch-embeds |
+| `triage.py` | Writes confirmed excerpts/synthesis/rejections/chunks into `snippets`, batch-embeds; refuses a transcript batch that ignored published chapters |
 | `embed.py` | Voyage AI (`voyage-4`), float32 blob codec, `.env` loader |
 | `search.py` | Hybrid FTS5 + cosine, fused by RRF, neighbor expansion; takes caller-extracted `terms` |
 | `youtube.py` | Captions with two-source fallback + title/channel/duration + published chapters via yt-dlp |

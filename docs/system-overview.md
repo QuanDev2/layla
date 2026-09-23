@@ -87,13 +87,18 @@ flowchart LR
 
 ### A video with published chapters
 
-Same five steps, different authority over box 2. `chapter_points()` turns the
-creator's chapters into fixed level-2 boundaries first; the model then runs
-with those boundaries in its prompt and may only add level-3 subheadings —
-one per chapter, plus extra splits inside any chapter over `TARGET_CHARS`.
-`_chapter_complaints()` checks that contract and feeds the existing retry.
-Boundaries are the creator's, headings are the model's, and neither is the
-agent's. `docs/youtube.md` section 3 holds the detail.
+Same five steps, different authority over box 2. The chapters were stored in
+the document's `source_metadata` blob at capture time, so
+`chunker.invoke_document()` reads them from the row rather than refetching —
+there is no flag to forget and no network call at chunk time.
+`chapter_points()` turns them into fixed level-2 boundaries first; the model
+then runs with those boundaries in its prompt and may only add level-3
+subheadings — one per chapter, plus extra splits inside any chapter over
+`TARGET_CHARS`. `_chapter_complaints()` checks that contract and feeds the
+existing retry. Boundaries are the creator's, headings are the model's, and
+neither is the agent's. `triage.write_chunks()` then refuses any transcript
+batch that ignored published chapters. `docs/youtube.md` section 3 holds the
+detail.
 
 ---
 
@@ -178,11 +183,12 @@ flowchart TD
 | Module | Role | Called by |
 |---|---|---|
 | `db.py` | Schema + connection helper. Applies schema on first connect. | every module |
-| `ingest.py` | Writes the `documents` row. Never fetches, never calls an LLM. | Layla |
-| `chunker.py` | Splits a document into ~1,800-char candidate chunks with context prefixes; fixes boundaries at a video's chapters when given them. CLI. | Layla |
+| `ingest.py` | Writes the `documents` row, including the source metadata blob it is handed. Never fetches, never calls an LLM. | Layla |
+| `metadata.py` | Owns the `source_metadata` blob: builds it from a fetcher result, reads back author and chapters. Distinguishes "unrecorded" from "none published". | `ingest.py`, `chunker.py`, `triage.py` |
+| `chunker.py` | Splits a document into ~1,800-char candidate chunks with context prefixes; `invoke_document()` reads text, title, author, and chapters from the row and fixes boundaries at the video's chapters. CLI. | Layla |
 | `heading_agent.py` | Proposes heading insertion points for unstructured text, or subheadings inside fixed chapters. | `chunker.py` only |
 | `youtube.py` | Fetches a video's captions (two sources, fallback), its title/channel/duration, and its published chapters. CLI. | Layla |
-| `triage.py` | Writes `snippets`, batch-embeds them. The only write path into the corpus. | Layla |
+| `triage.py` | Writes `snippets`, batch-embeds them. The only write path into the corpus; refuses a transcript batch that ignored published chapters. | Layla |
 | `embed.py` | Voyage `voyage-4`, float32 blob codec, `.env` key loading. | `triage.py`, `search.py` |
 | `search.py` | BM25 + cosine, fused by RRF, neighbor expansion, source metadata. | Layla |
 | `entities.py` | Registry of people and things; alias resolution. | Layla |

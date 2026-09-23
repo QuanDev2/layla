@@ -18,13 +18,15 @@ never re-litigate its decisions. Architecture and data flow at a glance:
 | Tool | Purpose |
 |---|---|
 | `python3 youtube.py <url> [--out PATH] [--languages en,es]` | Fetch a video's timestamped captions plus title/channel/duration. Two caption sources with fallback; `--out` writes the transcript text for capture |
-| `python3 chunker.py <path> --kind article\|transcript [--title T] [--channel C] [--no-llm] [--table]` | Split a document into candidate snippets with context prefixes. `--table` prints the confirm table; `--no-llm` skips heading proposal (deterministic split, instant) |
-| `ingest.capture(conn, text, source_type, url=None, title=None)` | Create a `documents` row from text already in hand. Dedupes by url — a known url returns the existing `document_id` with `duplicate: True` and writes nothing (dedupe is url-only; pasted text never dedupes) |
+| `python3 chunker.py --document-id N [--no-llm] [--table]` | Split a captured document into candidate snippets. Reads its text, title, author, and published chapters from the row — a video's chapters always become fixed boundaries, with no flag to pass. `--table` prints the confirm table; `--no-llm` skips heading proposal (deterministic split, instant) |
+| `python3 chunker.py <path> --kind article\|transcript [--title T] [--channel C]` | Same, for a loose file that was never captured. No chapter anchoring — a captured transcript must use `--document-id` |
+| `metadata.from_youtube(result)` | Build the `source_metadata` blob from youtube.py's result: `author` plus `video: {video_id, duration, chapters}`. Pass it straight to `capture()`; never hand-assemble it |
+| `ingest.capture(conn, text, source_type, url=None, title=None, metadata=None)` | Create a `documents` row from text already in hand. Dedupes by url — a known url returns the existing `document_id` with `duplicate: True` and writes nothing (dedupe is url-only; pasted text never dedupes) |
 | `ingest.set_summary(conn, document_id, summary)` | Record the discussion summary once the conversation concludes |
 | `triage.write_excerpt(conn, document_id, content, tags=None)` | Store one confirmed verbatim excerpt |
 | `triage.write_synthesis(conn, document_id, content, tags=None)` | Store a Q&A-derived answer from the triage conversation |
 | `triage.write_rejection(conn, document_id, reason, tags=None)` | Store the judgment behind a rejected claim — the reason, never the claim text |
-| `triage.write_chunks(conn, document_id, chunks, tags=None)` | Store every chunk from a "keep the whole document" call; takes chunker.py's `chunks` list, one batched embed |
+| `triage.write_chunks(conn, document_id, result, tags=None)` | Store every chunk from a "keep the whole document" call; takes chunker.py's whole result dict, one batched embed. Refuses a transcript batch that ignored the video's published chapters |
 | `triage.set_status(conn, document_id, status)` / `discard_document(conn, document_id)` | Close the document out: `kept` / `partial` / `discarded` |
 | `search.search(conn, query, terms=[...], limit=10)` | Hybrid keyword + meaning search over snippets, fused ranking, neighbor context, source metadata attached |
 | `entities.resolve(conn, text)` | Find which entity the user's words mean. Zero matches = new, more than one = ask which, never guess |
@@ -67,8 +69,9 @@ print(ingest.capture(c, open('/tmp/knowledge-in.md').read(), 'url',
 `data/knowledge.db` — gitignored, single SQLite file.
 
 - `documents` — archive + provenance: url, title, source_type, ingested_at,
-  raw_text, agent_summary, status. `raw_text` is stored pristine and never
-  searched.
+  raw_text, agent_summary, status, source_metadata. `raw_text` is stored
+  pristine and never searched; `source_metadata` is metadata.py's JSON blob
+  (`author`, and for a video `video: {video_id, duration, chapters}`).
 - `snippets` — the only retrievable unit: content, kind, chunk_index,
   free-form tags, embedding. FTS index kept in sync by triggers.
 - Document `status`: `pending` from capture until triage closes it — `kept`
@@ -79,12 +82,15 @@ print(ingest.capture(c, open('/tmp/knowledge-in.md').read(), 'url',
 
 1. Get the text. For a url, fetch it yourself with the read tool — ingest.py
    never fetches. Pasted text: use as given. For a YouTube video, run
-   `python3 youtube.py <url> --out /tmp/transcript.md`; its JSON carries the
-   title and channel you will need for the chunk prefix.
+   `python3 youtube.py <url> --out /tmp/transcript.md`; keep its whole JSON
+   result — title, channel, and chapters all come from it.
 2. Capture with `ingest.capture()` and the right `source_type` (`transcript`
-   for a video). On `duplicate: True`, stop — the document is already known;
-   read its summary and status, ask the user how to proceed. Never re-triage
-   silently.
+   for a video). For a video, pass `metadata=metadata.from_youtube(result)`
+   in the same call: the chapters stored here are the ones chunking will use
+   later, and a transcript captured without them cannot be chunked or written
+   at all (decision 24). On `duplicate: True`, stop — the document is already
+   known; read its summary and status, ask the user how to proceed. Never
+   re-triage silently.
 3. Give the gist. Read the full text into your own context, then report three
    or four numbered claims — no more. Its purpose is one decision: is this
    worth going deeper on. Layout: heading with the document title, italic
@@ -120,12 +126,15 @@ confirmation, then write. Never auto-select text.
 | User says | Write |
 |---|---|
 | "keep this part" | `write_excerpt` — the exact text shown back |
-| "keep the whole thing" | Run chunker.py with `--table` first; on confirm `write_chunks` with the result's `chunks` list |
+| "keep the whole thing" | Run `chunker.py --document-id N --table` first; on confirm pass that same result to `write_chunks` |
 | rejects a claim | Offer `write_rejection` — content is the judgment ("X doesn't hold because…"), never the rejected text itself |
 | asks something whose answer is worth keeping | Offer `write_synthesis` — your synthesized answer, not source text |
 
 - "Keep the whole document" never means one giant snippet — always the chunked
   split (decision 13).
+- A transcript's chunk table must read `backend: chapters+…` and
+  `chapters_used: true` when the video published chapters. Anything else is a
+  bug upstream, not something to write around — `write_chunks` refuses it.
 - Tags: free-form, the user's words; a list or comma-string both work.
 - A failed embed is never fatal: the row is written with `embedding NULL`,
   fully keyword-searchable, backfilled later. Report the `embed_error`; don't

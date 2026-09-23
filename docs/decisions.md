@@ -273,6 +273,34 @@ decision log that edits its own history is worthless.
     want FTS or embeddings, which reopens the second-ranked-index question.
     Thirty real rows will answer it better than a guess made at zero.
 
+24. **Source metadata is one JSON blob, and chapter-anchoring is enforced at
+    the write boundary.** `documents.source_metadata` holds a single blob
+    owned by `metadata.py`: common keys flat (`author`), source-specific keys
+    nested under one key per source type (`video: {video_id, duration,
+    chapters}`). `youtube.py` already fetches chapters alongside the
+    captions, so `ingest.capture(..., metadata=...)` stores them once and
+    `chunker.invoke_document(conn, document_id)` reads text, title, author,
+    and chapters back from the row — no `--url` flag, no second yt-dlp call,
+    no network at chunk time. `triage.write_chunks()` then refuses a
+    transcript batch whose `chapters_used` is false when the video published
+    chapters.
+    **Why the blob, not columns.** A column per source kind widens the table
+    with mostly-NULL fields and costs a migration per new source type; the
+    nested kind key keeps each source's contract explicit and lets the
+    accessor validate per `source_type`.
+    **Why the gate, not an instruction.** The rule previously lived only in
+    prose, and `chunker.py`'s `if chapters:` branch is a consumer-side
+    conditional — a chapterless call was legal, exited 0, and produced
+    plausible-looking output with the wrong headings. A conditional with a
+    legitimate else-branch is not enforcement.
+    **Unrecorded is not "none published".** A failed `video_chapters()`
+    lookup omits the `chapters` key entirely, while a chapterless video
+    records `[]`. Only the second licenses the chapterless split; the first
+    is an error telling the operator to re-capture.
+    **Documents captured before this decision carry no blob** and are
+    refused at both the chunker and the gate rather than silently degraded.
+
+
 ## Schema (built; see db.py)
 
 ```sql
@@ -285,7 +313,8 @@ CREATE TABLE documents (
   raw_text        TEXT NOT NULL,
   structured_text TEXT,                    -- heading-annotated derived copy; raw_text stays pristine
   agent_summary   TEXT,
-  status          TEXT NOT NULL DEFAULT 'pending'  -- 'pending' | 'kept' | 'partial' | 'discarded'
+  status          TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'kept' | 'partial' | 'discarded'
+  source_metadata TEXT                             -- JSON blob owned by metadata.py (decision 24)
 );
 
 CREATE TABLE snippets (

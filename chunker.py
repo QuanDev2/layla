@@ -4,16 +4,17 @@ article/transcript text -> segment_units() -> heading_agent.insert_headings()
 -> validate_points() -> split_sections() -> split_body() -> build_prefix()
 -> candidate chunks. Nothing is written; the caller confirms first.
 
-In: raw document text or path, source kind ("article" | "transcript"),
-    optional document title / channel.
-Out: {"ok", "source_kind", "backend", "headings_inserted",
+In: a captured document_id (text, title, author, and chapters come from its
+    row), or a loose path plus source kind ("article" | "transcript").
+Out: {"ok", "source_kind", "backend", "chapters_used", "headings_inserted",
       "structured_text", "chunks"}; each chunk carries prefix, content,
       chars, over_cap, and a transcript timestamp range. Units underneath
       are exact character slices of the input, so re-joining them can
       never alter, drop, or duplicate source text.
-State: no writes, no database. The heading step shells out to
-       heading_agent (KNOWLEDGE_LLM backend); KNOWLEDGE_LLM=off or
-       use_llm=False splits on the document's own headings instead.
+State: reads one documents row in invoke_document(); never writes. The
+       heading step shells out to heading_agent (KNOWLEDGE_LLM backend);
+       KNOWLEDGE_LLM=off or use_llm=False splits on the document's own
+       headings instead.
 """
 
 import argparse
@@ -22,10 +23,13 @@ import re
 import sys
 from pathlib import Path
 
+import metadata
+
 NAME = "knowledge_chunker"
 DESCRIPTION = "Split a document into retrieval-sized candidate snippets with context prefixes."
 INPUT_SCHEMA = {
-    "path": {"type": "string", "required": True},
+    "path": {"type": "string", "required": False},
+    "document_id": {"type": "integer", "required": False},
     "kind": {"type": "string", "required": False},
     "title": {"type": "string", "required": False},
     "channel": {"type": "string", "required": False},
@@ -746,6 +750,9 @@ def _chunk(text: str, source_kind: str, doc_title: str, channel: str, use_llm: b
     In: raw text, source kind, title, channel, LLM toggle, published
         chapters (transcripts only).
     Out: see module docstring. Never raises; empty input fails as a dict.
+         chapters_used records whether the creator's boundaries actually
+         carried the split — triage.py's write gate reads it, so a
+         fall-through to the chapterless path can never pass unnoticed.
     """
     if not text or not text.strip():
         return {"ok": False, "error": "empty document"}
@@ -756,18 +763,24 @@ def _chunk(text: str, source_kind: str, doc_title: str, channel: str, use_llm: b
     points, backend = (None, None)
     if chapters:
         points, backend = _resolve_chapter_points(units, chapters, use_llm)
+    chapters_used = bool(points)
     if not points:
         points, backend = _resolve_points(units, source_kind, use_llm)
     sections = split_sections(units, points)
-    return {
+    result = {
         "ok": True,
         "source_kind": source_kind,
         "backend": backend,
+        "chapters_used": chapters_used,
         "headings_inserted": len(points),
         "structured_text": apply_points(text, units, points),
         "chunks": _build_chunks(text, sections, source_kind, doc_title, channel,
                                 own_h1=_own_h1(units)),
     }
+    if chapters and not chapters_used:
+        result["chapters_error"] = ("published chapters landed on no caption "
+                                    "segment; split fell back to the model")
+    return result
 
 
 def chunk_article(text: str, doc_title: str = "", *, use_llm: bool = True) -> dict:
@@ -822,11 +835,12 @@ def format_candidates(result: dict) -> str:
 
 
 def invoke(path: str, kind: str = "article", title: str = "", channel: str = "",
-           use_llm: bool = True, chapters: list = None, **_kwargs) -> dict:
-    """Chunk a document from disk into candidate snippets.
+           use_llm: bool = True, **_kwargs) -> dict:
+    """Chunk a loose document from disk into candidate snippets.
 
     In: document path, kind ("article" | "transcript"), title, channel,
-        LLM toggle, published chapters (transcripts only).
+        LLM toggle. A captured document goes through invoke_document()
+        instead, which supplies its chapters from the database.
     Out: see module docstring. A missing path or empty file fails as a
          dict; never raises.
     State: read-only.
@@ -837,33 +851,61 @@ def invoke(path: str, kind: str = "article", title: str = "", channel: str = "",
         return {"ok": False, "error": f"file not found: {path}"}
     if kind == "transcript":
         return chunk_transcript(text, video_title=title, channel=channel,
-                                use_llm=use_llm, chapters=chapters)
+                                use_llm=use_llm)
     return chunk_article(text, title, use_llm=use_llm)
+
+
+def invoke_document(conn, document_id: int, use_llm: bool = True) -> dict:
+    """Chunk a captured document by id, using its stored metadata.
+
+    In: open db.py connection, document_id, LLM toggle.
+    Out: see module docstring. The document's own row supplies the text,
+         title, author, and — for a transcript — the creator's chapters,
+         so no caller can omit them and silently get the worse split.
+         A transcript whose chapters were never recorded fails here.
+    State: read-only; one documents row plus its metadata blob.
+    """
+    row = conn.execute(
+        "SELECT title, source_type, raw_text FROM documents WHERE id = ?",
+        (document_id,),
+    ).fetchone()
+    if row is None:
+        return {"ok": False, "error": f"no document with id {document_id}"}
+
+    meta = metadata.load(conn, document_id)
+    chapters, error = metadata.require_chapters(meta, row["source_type"])
+    if error:
+        return {"ok": False, "error": error}
+
+    if row["source_type"] == "transcript":
+        return chunk_transcript(row["raw_text"], video_title=row["title"] or "",
+                                channel=metadata.author(meta), use_llm=use_llm,
+                                chapters=chapters)
+    return chunk_article(row["raw_text"], row["title"] or "", use_llm=use_llm)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=DESCRIPTION)
-    parser.add_argument("path", help="Document to chunk")
+    parser.add_argument("path", nargs="?", help="Document to chunk; omit when using --document-id")
+    parser.add_argument("--document-id", type=int, default=None,
+                        help="Captured document to chunk; reads its text, title, author, and chapters from the database")
     parser.add_argument("--kind", choices=("article", "transcript"), default="article")
     parser.add_argument("--title", default="")
     parser.add_argument("--channel", default="")
     parser.add_argument("--no-llm", action="store_true", help="Skip the heading model")
     parser.add_argument("--table", action="store_true", help="Print the candidate table")
-    parser.add_argument("--url", default=None,
-                        help="Video URL; its published chapters become fixed section boundaries")
     args = parser.parse_args()
 
-    chapters = None
-    if args.url:
-        from youtube import video_chapters
-        fetched = video_chapters(args.url)
-        if not fetched.get("ok"):
-            print(f"chapters unavailable: {fetched['error']}", file=sys.stderr)
-        else:
-            chapters = fetched["chapters"]
+    if bool(args.path) == bool(args.document_id):
+        print("pass exactly one of path or --document-id", file=sys.stderr)
+        return 2
 
-    result = invoke(args.path, kind=args.kind, title=args.title,
-                    channel=args.channel, use_llm=not args.no_llm, chapters=chapters)
+    if args.document_id:
+        import db
+        result = invoke_document(db.connect(), args.document_id, use_llm=not args.no_llm)
+    else:
+        result = invoke(args.path, kind=args.kind, title=args.title,
+                        channel=args.channel, use_llm=not args.no_llm)
     print(format_candidates(result) if args.table
           else json.dumps(result, indent=2, ensure_ascii=False))
     return 0 if result.get("ok") else 1

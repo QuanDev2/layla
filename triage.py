@@ -17,6 +17,7 @@ State: writes to snippets/documents via the caller's connection; does not
 from datetime import datetime, timezone
 
 import embed as embed_mod
+import metadata
 
 _KINDS = ("excerpt", "synthesis", "rejection")
 _STATUSES = ("pending", "kept", "partial", "discarded")
@@ -128,32 +129,69 @@ def write_rejection(conn, document_id: int, reason: str, tags=None) -> dict:
     return _write_one(conn, document_id, reason, "rejection", None, tags)
 
 
-def write_chunks(conn, document_id: int, chunks: list, tags=None) -> dict:
+def _chapter_gate(conn, document_id: int, source_type: str, result: dict) -> str:
+    """Refuse a transcript split that ignored the creator's chapters.
+
+    In: connection, document_id, the document's source_type, chunker result.
+    Out: an error string when the write must be refused, else None. A
+         transcript with no recorded chapters is refused too: unrecorded
+         and "creator published none" are different facts, and only the
+         second licenses a chapterless split.
+    """
+    if source_type != "transcript":
+        return None
+    meta = metadata.load(conn, document_id)
+    published = metadata.chapters(meta, source_type)
+    if published is None:
+        return ("no chapters recorded for document "
+                f"{document_id} — re-capture it with youtube.py metadata before writing")
+    if not published:
+        return None
+    if not result.get("chapters_used"):
+        return (f"document {document_id} published {len(published)} chapters but the split "
+                f"was not anchored to them (backend={result.get('backend')!r}) — re-chunk "
+                "with chunker.invoke_document()")
+    return None
+
+
+def write_chunks(conn, document_id: int, result: dict, tags=None) -> dict:
     """Store every chunk from a "keep the whole document" decision.
 
-    In: chunk.py's chunk_article()/chunk_transcript() `chunks` list —
-        each already carries its own `content` (prefix + body) and
-        `chunk_index`. This is decision 13's "chunking the whole document
-        into several coherent snippets" path — same excerpt kind, just
-        more of them, all still shown to the user via format_candidates
-        before this is ever called.
+    In: a chunker.py chunk result — its `chunks` list (each already
+        carrying `content` and `chunk_index`) plus the `backend` and
+        `chapters_used` provenance the gate below reads. This is decision
+        13's "chunking the whole document into several coherent snippets"
+        path — same excerpt kind, just more of them, all still shown to
+        the user via format_candidates before this is ever called.
     Out: {"ok": True, "snippet_ids": [int...], "embedded": int, "total": int}
-         or {"ok": False, "error": str}. One partial embed failure does not
-         fail the whole batch — each row's own embedded flag is folded
-         into the "embedded" count instead.
+         or {"ok": False, "error": str}. A transcript whose video published
+         chapters is rejected unless the split was anchored to them, so a
+         chapterless fallback can never reach the corpus. One partial embed
+         failure does not fail the whole batch — each row's own embedded
+         flag is folded into the "embedded" count instead.
     State: one batched embed.embed() call for every chunk's content, not
            one call per chunk — matches embed.py's batching contract.
     """
+    if not isinstance(result, dict):
+        return {"ok": False, "error": "expected a chunker result dict, not a bare chunks list"}
+    chunks = result.get("chunks")
     if not chunks:
         return {"ok": False, "error": "no chunks to write"}
-    if not _document_exists(conn, document_id):
+    row = conn.execute(
+        "SELECT source_type FROM documents WHERE id = ?", (document_id,)
+    ).fetchone()
+    if row is None:
         return {"ok": False, "error": f"no document with id {document_id}"}
 
+    gate_error = _chapter_gate(conn, document_id, row["source_type"], result)
+    if gate_error:
+        return {"ok": False, "error": gate_error}
+
     contents = [c["content"] for c in chunks]
-    result = embed_mod.embed(contents)
-    if result.get("ok"):
-        vectors = [embed_mod.to_blob(v) for v in result["vectors"]]
-        model = result["model"]
+    embed_result = embed_mod.embed(contents)
+    if embed_result.get("ok"):
+        vectors = [embed_mod.to_blob(v) for v in embed_result["vectors"]]
+        model = embed_result["model"]
     else:
         vectors = [None] * len(chunks)
         model = None

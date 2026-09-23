@@ -15,6 +15,8 @@ State: writes one row to documents via the caller's connection; does not
 
 from datetime import datetime, timezone
 
+import metadata as metadata_mod
+
 _SOURCE_TYPES = ("url", "pasted", "file", "transcript")
 
 
@@ -26,11 +28,13 @@ def _document_exists(conn, document_id: int) -> bool:
     return conn.execute("SELECT 1 FROM documents WHERE id = ?", (document_id,)).fetchone() is not None
 
 
-def capture(conn, text: str, source_type: str, url: str = None, title: str = None) -> dict:
+def capture(conn, text: str, source_type: str, url: str = None, title: str = None,
+            metadata: dict = None) -> dict:
     """Create a documents row, or return the existing one for a known url.
 
     In: text (raw_text — stored pristine, never modified by this module),
-        source_type, optional url/title.
+        source_type, optional url/title, optional source metadata blob
+        built by metadata.from_youtube() — never assembled here.
     Out: see module docstring. status starts 'pending' regardless of
          source — the triage decision that changes it happens later and
          elsewhere (triage.py).
@@ -46,9 +50,9 @@ def capture(conn, text: str, source_type: str, url: str = None, title: str = Non
             return {"ok": True, "document_id": existing["id"], "duplicate": True}
 
     cur = conn.execute(
-        "INSERT INTO documents (url, title, source_type, ingested_at, raw_text, status) "
-        "VALUES (?, ?, ?, ?, ?, 'pending')",
-        (url, title, source_type, _now(), text),
+        "INSERT INTO documents (url, title, source_type, ingested_at, raw_text, status, source_metadata) "
+        "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+        (url, title, source_type, _now(), text, metadata_mod.dumps(metadata)),
     )
     conn.commit()
     return {"ok": True, "document_id": cur.lastrowid, "duplicate": False}

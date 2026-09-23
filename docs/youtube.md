@@ -75,6 +75,12 @@ chapters are two calls rather than one. `invoke()` returns them as
 `chapters: [{title, start, end}]`, seconds, empty when the creator published
 none, with `chapters_error` set if yt-dlp failed.
 
+Chapters are **stored at capture time, never refetched at chunk time**:
+`metadata.from_youtube()` folds them into the document's `source_metadata`
+blob, and `chunker.invoke_document()` reads them back from the row. A failed
+lookup omits the `chapters` key entirely, so "yt-dlp failed" never reads back
+as "creator published none" — only the second licenses a chapterless split.
+
 `chunker.chunk_transcript(..., chapters=[...])` then splits on them:
 
 - **Chapter starts are fixed level-2 points.** Each maps to the first caption
@@ -93,7 +99,10 @@ none, with `chapters_error` set if yt-dlp failed.
   unchanged.
 
 Prefix and backend label say which path ran: `chapters+omp` for the full path,
-`chapters` for chapter-only, `omp`/`fallback` for a chapterless video.
+`chapters` for chapter-only, `omp`/`fallback` for a chapterless video. The
+result also carries `chapters_used`, and `triage.write_chunks()` refuses a
+transcript whose video published chapters unless that flag is true — a
+chapterless fallback cannot reach the corpus.
 
 ---
 
