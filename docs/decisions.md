@@ -140,14 +140,13 @@ decision log that edits its own history is worthless.
     free-form flow as a partial keep), just more of them. Retrieval
     (`search.py`) only ever queries `snippets`; `documents` is joined back
     afterward solely to attach source `title`/`url`/`ingested_at` to a hit.
-14. **Chunking is structural, target ~1,800 chars, hard cap 7,000 chars —
+14. **Chunking is structural, target ~1,800 chars, section cap 7,000 chars —
     characters, not tokens.** Boundaries follow the document's own
     structure (headings, paragraph groups, complete code examples) — never
-    split mid-code-block or mid-sentence. The cap exists because it is
-    EmbeddingGemma's input limit (2,048 tokens); 7,000 chars ≈ 2,000 tokens
-    at a deliberately conservative 3.5 chars/token estimate, so it
-    over-counts and never overshoots the real limit — no tokenizer, no new
-    dependency. No minimum size — a one-paragraph snippet is fine if it's a
+    split mid-code-block or mid-sentence. `MAX_CHARS = 7000` is the
+    section-subdivision threshold: a section still over it after headings
+    are applied is sent back for another heading. No minimum size — a
+    one-paragraph snippet is fine if it's a
     complete, useful excerpt. Code fences are atomic: a fenced block is
     never split, and a single unit over the cap (one huge fence or one
     enormous sentence) is never truncated either — it is stored whole as one
@@ -156,6 +155,22 @@ decision log that edits its own history is worthless.
     boundaries and shows them before writing, same free-form/confirm flow as
     decision 10 — chunking is never silent, even for a "keep whole" article.
     Full build spec: "Chunking implementation plan" below.
+    **Correction (2026-09-23, measured):** this decision originally said the
+    cap *was* the embedding guard — "7,000 chars ≈ 2,000 tokens at a
+    deliberately conservative 3.5 chars/token estimate, so it over-counts
+    and never overshoots." That estimate is not conservative; it is
+    optimistic by 40%. Measured against the real tokenizer via
+    `prompt_eval_count`, the worst
+    ratio in this corpus is **2.45 chars/token**; timestamped transcript
+    text (`[07:45]` markers every line) tokenizes far denser than prose. At
+    that ratio 7,000 chars is ~2,850 tokens, past the 2,048-token window,
+    so `MAX_CHARS` was never the embedding guard it was described as. The
+    two jobs are now separate constants: `MAX_CHARS` keeps the structural
+    section threshold, and `embed.MAX_INPUT_CHARS = 4800` (~1,960 tokens at
+    the measured worst ratio) is what `over_cap` compares against. Nothing
+    in the corpus was affected — the real binding constraint is
+    `TARGET_CHARS = 1800`, and the longest stored snippet measures 718
+    tokens, 35% of the window.
 15. **Zero stored overlap; read-time neighbor expansion.** For whoever
     builds `search.py`: a hit on a snippet with a non-NULL `chunk_index` is
     joined with `chunk_index - 1` and `+ 1` from the same `document_id`
@@ -1178,9 +1193,11 @@ but not deterministic" note above). Calibrate check 1 accordingly:
   its 2,048-token window is truncated by the model, so no manual
   pre-truncation guard is needed. `content` in the database is untouched
   either way — only the embedding call ever sees a truncated copy. The
-  margin is now much thinner: the window fell from 32,000 tokens to 2,048,
-  and `MAX_CHARS = 7000` (~1,750 tokens) is what keeps this from
-  triggering. `MAX_CHARS` cannot be raised without rechecking this.
+  margin is now much thinner: the window fell from 32,000 tokens to 2,048.
+  `MAX_CHARS = 7000` was described as the guard and is not — see decision
+  14's 2026-09-23 correction. `embed.MAX_INPUT_CHARS = 4800` is the real
+  ceiling, derived from a measured 2.45 chars/token worst case, and
+  `over_cap` compares against it.
 
 ## Status
 

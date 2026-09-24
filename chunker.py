@@ -23,6 +23,7 @@ import re
 import sys
 from pathlib import Path
 
+import embed
 import metadata
 
 NAME = "knowledge_chunker"
@@ -37,6 +38,9 @@ INPUT_SCHEMA = {
 }
 
 TARGET_CHARS = 1800
+# Section-subdivision threshold, not the embedding limit: a section still
+# over this after headings are applied is sent back for another heading.
+# The embedding ceiling is embed.MAX_INPUT_CHARS, which over_cap uses.
 MAX_CHARS = 7000
 ANCHOR_WINDOW = 5
 ANCHOR_WORDS = 6
@@ -533,8 +537,10 @@ def _build_chunks(text: str, sections: list, source_kind: str,
         own level-1 heading.
     Out: chunks with prefix, content, chars, over_cap, and timestamp
          range. A body is sliced by character offset, so whitespace
-         between units is preserved exactly as written. chars and the cap
-         check count the prefix too — that is what gets embedded. When a
+         between units is preserved exactly as written. chars and the
+         over_cap check count the prefix too — that is what gets embedded,
+         and over_cap measures against embed.MAX_INPUT_CHARS, the model's
+         real window, not the section-subdivision cap. When a
          doc_title is given, the document's own H1 is dropped from every
          heading path: both fill the title slot, so keeping the pair spends
          prefix chars on a repeat in every embedded chunk. Without a
@@ -557,7 +563,7 @@ def _build_chunks(text: str, sections: list, source_kind: str,
                 "prefix": prefix,
                 "content": content,
                 "chars": len(content),
-                "over_cap": len(content) > MAX_CHARS,
+                "over_cap": len(content) > embed.MAX_INPUT_CHARS,
                 "start": start,
                 "end": end,
             })

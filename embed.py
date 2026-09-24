@@ -72,6 +72,14 @@ MAX_BATCH = 64  # texts per HTTP request; longer lists are sliced, not rejected
 EMBED_DIMS = 768
 _KNOWN_BACKENDS = ("local", "off")
 
+# Longest content this model can embed without silent truncation. Derived,
+# not guessed: the window is 2,048 tokens, and the worst measured ratio on
+# this corpus is 2.45 chars/token — timestamped transcript text tokenizes
+# far denser than prose. 4,800 chars is ~1,960 tokens at that ratio, inside
+# the window with the task prefix counted. chunker.py flags a chunk past
+# this as over_cap; nothing rejects it, since FTS5 still indexes all of it.
+MAX_INPUT_CHARS = 4800
+
 # EmbeddingGemma is trained with task prefixes and measurably degrades
 # without them. "title: none" is deliberate: chunk content already opens
 # with its own context prefix (decision 18), so the real title would

@@ -137,7 +137,10 @@ touching a module, not this file.
   prefixes (`title: none | text:` / `task: search result | query:`) are applied
   inside `_embed_local()`, never at call sites — omitting them measurably
   degrades retrieval. Context window is 2,048 tokens, down from Voyage's
-  32,000: `MAX_CHARS = 7000` fits, and cannot be raised without rechecking.
+  32,000. `MAX_CHARS = 7000` does **not** guard it — measured at 2.45
+  chars/token on timestamped transcripts, 7,000 chars is ~2,850 tokens.
+  `embed.MAX_INPUT_CHARS = 4800` is the real ceiling and `over_cap` uses
+  it; `MAX_CHARS` is only the section-subdivision threshold.
 - **A failed/missing embed is never fatal.** Rows are written with
   `embedding=NULL` rather than blocking — still keyword-searchable.
 - **Temporal boost was cut** after design review: real query phrasing doesn't
