@@ -186,9 +186,13 @@ After the rewrite, "how to tell if denim buttons are cheap" returns the
   conversation.
 - Frame extraction remains designed-but-unbuilt: plan and proposed schema in
   `docs/youtube.md`.
-- The corpus is 3 documents / 24 snippets. Retrieval quality past one
-  creator per topic is untested — a second clothing source would be the
-  first real test of ranking across sources.
+- The corpus is 6 documents / 46 snippets (4 documents carry snippets; 2 were
+  discarded). Retrieval was measured on the local model 2026-09-23 — 46/46
+  self-retrieval at rank 1, 12/12 paraphrase queries in the top 3, 6/8
+  cross-document discrimination with both misses being ambiguous labels
+  rather than bad ranking. Still untested: a second creator on the same
+  topic. `d3` and `d6` are both Laura VonV, so ranking across sources has
+  never actually been exercised.
 - `dev/judge.py` has never been run against the chapter path; heading quality
   there is unmeasured.
 
